@@ -20,6 +20,7 @@ from arbiter.ingestion.base import Contract, MarketClient
 from arbiter.ingestion.matcher import ContractMatcher
 from arbiter.models.base import ProbabilityEstimator
 from arbiter.models.features import FEATURE_VERSION, SPEC, extract_features
+from arbiter.scoring.consistency import find_consistency_violations
 from arbiter.scoring.ev import ScoredOpportunity, compute_ev
 
 logger = logging.getLogger(__name__)
@@ -78,7 +79,7 @@ class ScanPipeline:
         logger.info(
             "Contracts fetched: %s total=%d (%.1fs)",
             " ".join(
-                f"{type(c).__name__}={len(b)}" for c, b in zip(self._clients, batches)
+                f"{type(c).__name__}={len(b)}" for c, b in zip(self._clients, batches, strict=True)
             ),
             len(all_contracts),
             t_fetch - t_start,
@@ -95,8 +96,9 @@ class ScanPipeline:
             # be skipped for the vast majority of contracts with no prior opportunity.
             # Without this, every contract causes 2 remote SELECT queries (~7k/cycle).
             active_result = await session.execute(
-                select(Opportunity.contract_id, Opportunity.direction)
-                .where(Opportunity.active.is_(True))
+                select(Opportunity.contract_id, Opportunity.direction).where(
+                    Opportunity.active.is_(True)
+                )
             )
             active_opps: set[tuple[str, str]] = {
                 (row.contract_id, row.direction) for row in active_result
@@ -129,6 +131,12 @@ class ScanPipeline:
 
                 # 7. Snapshot for continuous training data
                 await self._snapshot(session, contract)
+
+            # 8. Range-market consistency check (Kalshi intra-group arb)
+            for opp in find_consistency_violations(all_contracts, self._fee_rate):
+                if opp.expected_value >= self._ev_threshold:
+                    alerted = await self._upsert_and_alert(session, opp)
+                    alerts_sent += alerted
 
             await session.commit()
 

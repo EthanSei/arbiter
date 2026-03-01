@@ -118,9 +118,19 @@ class KalshiClient(MarketClient):
             volume_24h=_to_float(m.get("volume_24h_fp")) or 0.0,
             open_interest=_to_float(m.get("open_interest")) or 0.0,
             expires_at=expires_at,
-            url=str(m.get("url", "")),
+            url=m.get("url") or _build_kalshi_url(str(m["ticker"])),
             status=str(m.get("status", "open")),
         )
+
+
+def _build_kalshi_url(ticker: str) -> str:
+    """Build a two-segment Kalshi URL that works as a mobile deep link.
+
+    Format: https://kalshi.com/markets/{series_prefix}/{ticker}
+    Series prefix is the text before the first '-' in the ticker.
+    """
+    series_prefix = ticker.split("-", 1)[0]
+    return f"https://kalshi.com/markets/{series_prefix}/{ticker}"
 
 
 def _to_float(val: Any) -> float | None:

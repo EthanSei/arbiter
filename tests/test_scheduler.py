@@ -84,6 +84,13 @@ class _RecordingChannel(AlertChannel):
         pass
 
 
+class _MidpointEstimator(ProbabilityEstimator):
+    """Returns each contract's own yes_price — simulates the no-model fallback."""
+
+    async def estimate(self, contract: Contract) -> float:
+        return contract.yes_price
+
+
 class _BrokenChannel(AlertChannel):
     async def send(self, opp: ScoredOpportunity) -> None:
         raise RuntimeError("channel broke")
@@ -429,6 +436,62 @@ async def test_deactivate_not_queried_for_contracts_without_prior_opportunity(
     async with db_factory() as session:
         rows = (await session.execute(select(Opportunity))).scalars().all()
     assert rows == []  # No spurious Opportunity rows created
+
+
+# ---------------------------------------------------------------------------
+# run_cycle — range-market consistency check
+# ---------------------------------------------------------------------------
+
+
+async def test_run_cycle_alerts_on_consistency_violation(db_factory) -> None:
+    """A Kalshi range-market monotonicity violation triggers an alert even when
+    the per-contract EV (midpoint fallback) is negative.
+
+    P(above $80k)=0.31 < P(above $82.5k)=0.50 → model_prob=0.50
+    EV = 0.50 - 0.31 - 0.01 = 0.18 >> threshold of 0.05
+    """
+    from datetime import UTC, datetime
+
+    from arbiter.ingestion.base import Contract
+
+    def _range_contract(cid: str, yes_price: float) -> Contract:
+        return Contract(
+            source="kalshi",
+            contract_id=cid,
+            title=f"BTC range {cid}",
+            category="",
+            yes_price=yes_price,
+            no_price=round(1.0 - yes_price, 6),
+            yes_bid=yes_price - 0.01,
+            yes_ask=yes_price + 0.01,
+            last_price=None,
+            volume_24h=100.0,
+            open_interest=500.0,
+            expires_at=datetime(2026, 3, 31, tzinfo=UTC),
+            url="https://kalshi.com",
+            status="open",
+        )
+
+    underpriced = _range_contract("KXBTCMAXMON-BTC-26MAR31-8000000", 0.31)
+    anchor = _range_contract("KXBTCMAXMON-BTC-26MAR31-8250000", 0.50)
+
+    channel = _RecordingChannel()
+    # Midpoint estimator returns each contract's own yes_price
+    # → per-contract EV = yes_price - (yes_price + fee) = -0.01 for every contract.
+    # Consistency checker should catch the violation and fire.
+    p = _pipeline(
+        [_OkClient([underpriced, anchor])],
+        _MidpointEstimator(),
+        [channel],
+        db_factory,
+        ev_threshold=0.05,
+        fee_rate=0.01,
+    )
+    alerts = await p.run_cycle()
+    assert alerts == 1
+    assert len(channel.sent) == 1
+    assert channel.sent[0].contract.contract_id == "KXBTCMAXMON-BTC-26MAR31-8000000"
+    assert channel.sent[0].direction == "yes"
 
 
 async def test_no_channels_does_not_stamp_last_alerted_at(db_factory) -> None:

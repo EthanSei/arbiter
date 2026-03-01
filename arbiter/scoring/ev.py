@@ -1,6 +1,8 @@
 """Expected value calculation for prediction market contracts."""
 
-from dataclasses import dataclass
+from __future__ import annotations
+
+from dataclasses import dataclass, field
 
 from arbiter.ingestion.base import Contract
 from arbiter.scoring.kelly import kelly_criterion
@@ -11,6 +13,8 @@ class ScoredOpportunity:
     """A contract scored with expected value and Kelly sizing.
 
     Wraps the original Contract via composition, adding computed fields.
+    For consistency arbs, ``anchor_contract`` holds the sibling that proves
+    the price floor (the second leg of the trade).
     """
 
     contract: Contract
@@ -19,6 +23,7 @@ class ScoredOpportunity:
     model_probability: float  # our estimated true probability for this direction
     expected_value: float  # EV per dollar, after execution costs
     kelly_size: float  # full Kelly fraction (caller applies fractional Kelly)
+    anchor_contract: Contract | None = field(default=None)  # sibling for consistency arbs
 
 
 def compute_ev(
