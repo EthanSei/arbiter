@@ -6,7 +6,7 @@ import sys
 
 def main() -> None:
     try:
-        from arbiter.main import main as async_main  # type: ignore[import-untyped]
+        from arbiter.main import main as async_main  # type: ignore[import-untyped]  # noqa: PLC0415
 
         asyncio.run(async_main())
     except ImportError:

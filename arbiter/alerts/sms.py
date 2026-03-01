@@ -12,4 +12,7 @@ class SMSChannel(AlertChannel):
     """
 
     async def send(self, opportunity: ScoredOpportunity) -> None:
-        raise NotImplementedError  # Phase 5
+        raise NotImplementedError  # Phase 5 (skipped)
+
+    async def close(self) -> None:
+        pass  # No resources to release until implemented
