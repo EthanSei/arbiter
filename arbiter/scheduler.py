@@ -66,22 +66,42 @@ class ScanPipeline:
 
     async def run_cycle(self) -> int:
         """Execute one full scan cycle. Returns the number of alerts sent."""
+        t_start = asyncio.get_running_loop().time()
+
         # 1. Fetch markets from all clients concurrently
         batches: list[list[Contract]] = list(
             await asyncio.gather(*[self._fetch_safe(c) for c in self._clients])
         )
         all_contracts: list[Contract] = [c for batch in batches for c in batch]
         self._last_markets_scanned = len(all_contracts)
+        t_fetch = asyncio.get_running_loop().time()
+        logger.info(
+            "Contracts fetched: %s total=%d (%.1fs)",
+            " ".join(
+                f"{type(c).__name__}={len(b)}" for c, b in zip(self._clients, batches)
+            ),
+            len(all_contracts),
+            t_fetch - t_start,
+        )
 
-        # 2. Match contracts cross-platform (cross-platform features wired in future)
-        kalshi = [c for c in all_contracts if c.source == "kalshi"]
-        polymarket = [c for c in all_contracts if c.source == "polymarket"]
-        if kalshi and polymarket:
-            self._matcher.match(kalshi, polymarket)
+        # 2. Cross-platform matching is deferred until cross-platform features
+        # are wired into extract_features.  Running O(|kalshi|×|polymarket|)
+        # comparisons and discarding the result wastes ~1-2s per cycle.
 
         # 3–7. Score every contract, dedup, alert, snapshot
         alerts_sent = 0
         async with self._session_factory() as session:
+            # Pre-fetch active opportunity keys in one query so _deactivate can
+            # be skipped for the vast majority of contracts with no prior opportunity.
+            # Without this, every contract causes 2 remote SELECT queries (~7k/cycle).
+            active_result = await session.execute(
+                select(Opportunity.contract_id, Opportunity.direction)
+                .where(Opportunity.active.is_(True))
+            )
+            active_opps: set[tuple[str, str]] = {
+                (row.contract_id, row.direction) for row in active_result
+            }
+
             for contract in all_contracts:
                 # 3. Estimate probability
                 model_prob = await self._estimator.estimate(contract)
@@ -98,16 +118,29 @@ class ScanPipeline:
                 for opp in above:
                     alerted = await self._upsert_and_alert(session, opp)
                     alerts_sent += alerted
+                    active_opps.add((contract.contract_id, opp.direction))
 
-                # Deactivate opportunities that dropped below threshold
+                # Deactivate only opportunities known to be active — skip SELECT
+                # entirely for contracts that never had a recorded opportunity.
                 for direction in below_dirs:
-                    await self._deactivate(session, contract.contract_id, direction)
+                    if (contract.contract_id, direction) in active_opps:
+                        await self._deactivate(session, contract.contract_id, direction)
+                        active_opps.discard((contract.contract_id, direction))
 
                 # 7. Snapshot for continuous training data
                 await self._snapshot(session, contract)
 
             await session.commit()
 
+        t_end = asyncio.get_running_loop().time()
+        logger.info(
+            "Cycle complete: contracts=%d alerts=%d fetch=%.1fs score+db=%.1fs total=%.1fs",
+            len(all_contracts),
+            alerts_sent,
+            t_fetch - t_start,
+            t_end - t_fetch,
+            t_end - t_start,
+        )
         return alerts_sent
 
     async def _upsert_and_alert(self, session: AsyncSession, opp: ScoredOpportunity) -> int:
@@ -249,4 +282,5 @@ class ScanPipeline:
                 errors.append(str(exc))
                 update_health(status="degraded", errors=errors)
 
-            await asyncio.sleep(poll_interval)
+            elapsed = asyncio.get_running_loop().time() - t0
+            await asyncio.sleep(max(0.0, poll_interval - elapsed))

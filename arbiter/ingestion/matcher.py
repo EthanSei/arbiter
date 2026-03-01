@@ -95,8 +95,5 @@ def _title_similarity(a: str, b: str) -> float:
 
 def _tokenize(text: str) -> set[str]:
     """Lowercase, strip punctuation, split into word tokens."""
-    cleaned = ""
-    for ch in text.lower():
-        if ch.isalnum() or ch == " ":
-            cleaned += ch
+    cleaned = "".join(ch for ch in text.lower() if ch.isalnum() or ch == " ")
     return {w for w in cleaned.split() if len(w) > 1}
