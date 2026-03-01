@@ -120,6 +120,18 @@ class TestDiscordChannel:
 
         assert "Discord alert failed" in caplog.text
 
+    async def test_handles_timeout_gracefully(self, caplog: pytest.LogCaptureFixture) -> None:
+        """send() logs a warning on request timeout instead of raising."""
+        url = "https://discord.com/api/webhooks/test/token"
+        channel = DiscordChannel(webhook_url=url)
+
+        with patch.object(channel._client, "post", new_callable=AsyncMock) as mock_post:
+            mock_post.side_effect = httpx.TimeoutException("Request timed out")
+            with caplog.at_level("WARNING"):
+                await channel.send(_make_opportunity())
+
+        assert "Discord alert failed" in caplog.text
+
     async def test_close_closes_client(self) -> None:
         """close() shuts down the underlying httpx client."""
         channel = DiscordChannel(webhook_url="https://discord.com/api/webhooks/test/token")
