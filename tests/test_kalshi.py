@@ -274,10 +274,37 @@ class TestKalshiClientFetchMarkets:
         resp = {"markets": [zero_vol], "cursor": ""}
         transport = _kalshi_transport([resp])
         async with httpx.AsyncClient(transport=transport) as http:
-            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2", min_volume_24h=0.0)
+            client = KalshiClient(
+                http,
+                base_url="https://api.kalshi.com/trade-api/v2",
+                min_volume_24h=0.0,
+            )
             contracts = await client.fetch_markets()
 
         assert len(contracts) == 1
+
+    async def test_missing_url_generates_kalshi_deep_link(self):
+        """When API returns no url, generate a two-segment kalshi.com deep link."""
+        market = {**KALSHI_MARKET_RESPONSE["markets"][0], "url": None}
+        resp = {"markets": [market], "cursor": ""}
+        transport = _kalshi_transport([resp])
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            contracts = await client.fetch_markets()
+
+        # Two-segment format: /markets/{series_prefix}/{ticker}
+        # Series prefix = text before first '-' in ticker
+        assert contracts[0].url == "https://kalshi.com/markets/KXBTC/KXBTC-26MAR14-T100000"
+
+    async def test_provided_url_is_preserved(self):
+        """When API returns a url, use it as-is."""
+        resp = {"markets": [KALSHI_MARKET_RESPONSE["markets"][0]], "cursor": ""}
+        transport = _kalshi_transport([resp])
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            contracts = await client.fetch_markets()
+
+        assert contracts[0].url == "https://kalshi.com/markets/KXBTC-26MAR14-T100000"
 
 
     async def test_default_limit_is_1000(self):
