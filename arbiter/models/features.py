@@ -106,7 +106,9 @@ def extract_features(
         features[12] = price_history[-1] - price_history[-2]  # delta_1h
         features[13] = price_history[-1] - price_history[0]  # delta_24h
         features[15] = float(np.std(price_history))  # volatility_24h
-    # single-point history: deltas and volatility stay NaN
+    elif price_history is not None and len(price_history) == 1:
+        # Single point: deltas and volatility undefined
+        pass
 
     if volume_history is not None and len(volume_history) >= 1:
         mean_vol = float(np.mean(volume_history))
