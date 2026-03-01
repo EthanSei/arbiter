@@ -2,8 +2,18 @@
 
 from __future__ import annotations
 
+import pickle
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
 from arbiter.ingestion.base import Contract
 from arbiter.models.base import ProbabilityEstimator
+from arbiter.models.features import extract_features
+
+# Clamp epsilon to avoid returning exactly 0 or 1
+_EPS = 1e-6
 
 
 class LGBMEstimator(ProbabilityEstimator):
@@ -15,7 +25,34 @@ class LGBMEstimator(ProbabilityEstimator):
     """
 
     def __init__(self, model_path: str | None = None) -> None:
-        raise NotImplementedError  # Phase 3
+        self._model: Any = None
+        self._calibrator: Any = None
+
+        if model_path is not None:
+            path = Path(model_path)
+            if not path.exists():
+                raise FileNotFoundError(f"Model file not found: {model_path}")
+            with open(path, "rb") as f:
+                data = pickle.load(f)  # noqa: S301
+            self._model = data["model"]
+            self._calibrator = data.get("calibrator")
+
+    @property
+    def model_loaded(self) -> bool:
+        return self._model is not None
 
     async def estimate(self, contract: Contract) -> float:
-        raise NotImplementedError  # Phase 3
+        if not self.model_loaded:
+            return float(np.clip(contract.yes_price, _EPS, 1.0 - _EPS))
+
+        features = extract_features(contract)
+        raw = self._model.predict(features.reshape(1, -1))
+        prob = float(raw[0])
+
+        if self._calibrator is not None:
+            prob = float(self._calibrator.predict(np.array([prob]))[0])
+
+        if np.isnan(prob):
+            return float(np.clip(contract.yes_price, _EPS, 1.0 - _EPS))
+
+        return float(np.clip(prob, _EPS, 1.0 - _EPS))
