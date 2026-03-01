@@ -11,4 +11,3 @@ __pycache__
 dist
 build
 .speak-memory
-tests
