@@ -24,18 +24,23 @@ class PolymarketClient(MarketClient):
         http: httpx.AsyncClient,
         *,
         gamma_base_url: str = "https://gamma-api.polymarket.com",
+        min_volume_24h: float = 100.0,
+        max_markets: int = 500,
     ) -> None:
         self._http = http
         self._gamma_base = gamma_base_url.rstrip("/")
+        self._min_volume_24h = min_volume_24h
+        self._max_markets = max_markets
 
     async def fetch_markets(self, *, limit: int = 100) -> list[Contract]:
         contracts: list[Contract] = []
         offset = 0
         while True:
-            params: dict[str, str | int] = {
+            params: dict[str, str | int | float] = {
                 "limit": limit,
                 "offset": offset,
                 "active": "true",
+                "volume_num_min": self._min_volume_24h,
             }
             resp = await self._http.get(f"{self._gamma_base}/markets", params=params)
             resp.raise_for_status()
@@ -47,11 +52,13 @@ class PolymarketClient(MarketClient):
             for m in markets:
                 if m.get("closed") or not m.get("accepting_orders", True):
                     continue
+                if float(m.get("volume24hr") or 0) < self._min_volume_24h:
+                    continue
                 contract = self._parse_market(m)
                 if contract is not None:
                     contracts.append(contract)
 
-            if len(markets) < limit:
+            if len(markets) < limit or len(contracts) >= self._max_markets:
                 break
             offset += len(markets)
         return contracts
@@ -87,7 +94,7 @@ class PolymarketClient(MarketClient):
             yes_bid=max(0.0, yes_price - _SPREAD_ESTIMATE),
             yes_ask=min(1.0, yes_price + _SPREAD_ESTIMATE),
             last_price=None,  # Gamma API doesn't provide last trade price
-            volume_24h=_safe_float(m.get("volume_24hr")),
+            volume_24h=_safe_float(m.get("volume24hr")),
             open_interest=_safe_float(m.get("liquidity")),
             expires_at=expires_at,
             url=url,

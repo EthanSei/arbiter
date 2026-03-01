@@ -36,8 +36,8 @@ async def main() -> None:
     kalshi_http = httpx.AsyncClient(timeout=30.0)
     poly_http = httpx.AsyncClient(timeout=30.0)
 
-    kalshi = KalshiClient(kalshi_http, base_url=settings.kalshi_api_base)
-    polymarket = PolymarketClient(poly_http, gamma_base_url=settings.polymarket_gamma_base)
+    kalshi = KalshiClient(kalshi_http, base_url=settings.kalshi_api_base, max_markets=settings.max_markets_per_poll)
+    polymarket = PolymarketClient(poly_http, gamma_base_url=settings.polymarket_gamma_base, max_markets=settings.max_markets_per_poll)
 
     # LGBMEstimator falls back to market midpoint when model file is absent.
     model_path: str | None = settings.model_weights_path

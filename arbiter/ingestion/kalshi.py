@@ -22,9 +22,11 @@ class KalshiClient(MarketClient):
         http: httpx.AsyncClient,
         *,
         base_url: str = "https://api.elections.kalshi.com/trade-api/v2",
+        max_markets: int = 500,
     ) -> None:
         self._http = http
         self._base_url = base_url.rstrip("/")
+        self._max_markets = max_markets
 
     async def fetch_markets(self, *, limit: int = 100) -> list[Contract]:
         contracts: list[Contract] = []
@@ -45,7 +47,7 @@ class KalshiClient(MarketClient):
                     contracts.append(contract)
 
             cursor = data.get("cursor", "")
-            if not cursor:
+            if not cursor or len(contracts) >= self._max_markets:
                 break
         return contracts
 

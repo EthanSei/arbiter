@@ -18,7 +18,7 @@ GAMMA_MARKET_RESPONSE = [
             {"outcome": "Yes", "price": "0.72"},
             {"outcome": "No", "price": "0.28"},
         ],
-        "volume_24hr": 340000.0,
+        "volume24hr": 340000.0,
         "liquidity": 120000.0,
         "end_date": "2026-03-31T23:59:59Z",
         "market_slug": "will-bitcoin-hit-100k-march-2026",
@@ -34,7 +34,7 @@ GAMMA_MARKET_RESPONSE = [
             {"outcome": "Yes", "price": "0.35"},
             {"outcome": "No", "price": "0.65"},
         ],
-        "volume_24hr": 89000.0,
+        "volume24hr": 89000.0,
         "liquidity": 45000.0,
         "end_date": "2026-03-19T18:00:00Z",
         "market_slug": "fed-cuts-rates-march-2026",
@@ -53,7 +53,7 @@ GAMMA_MARKET_PAGE2 = [
             {"outcome": "Yes", "price": "0.31"},
             {"outcome": "No", "price": "0.69"},
         ],
-        "volume_24hr": 1200000.0,
+        "volume24hr": 1200000.0,
         "liquidity": 800000.0,
         "end_date": "2026-11-03T23:59:59Z",
         "market_slug": "trump-wins-2026-midterm",
@@ -72,7 +72,7 @@ GAMMA_CLOSED_MARKET = [
             {"outcome": "Yes", "price": "1.00"},
             {"outcome": "No", "price": "0.00"},
         ],
-        "volume_24hr": 0.0,
+        "volume24hr": 0.0,
         "liquidity": 0.0,
         "end_date": "2025-01-01T00:00:00Z",
         "market_slug": "old-resolved-market",
@@ -209,10 +209,10 @@ class TestPolymarketClientFetchMarkets:
         assert len(contracts) == 0
 
     async def test_handles_null_volume(self):
-        market = {**GAMMA_MARKET_RESPONSE[0], "volume_24hr": None}
+        market = {**GAMMA_MARKET_RESPONSE[0], "volume24hr": None}
         transport = _gamma_transport([[market]])
         async with httpx.AsyncClient(transport=transport) as http:
-            client = PolymarketClient(http, gamma_base_url="https://gamma-api.polymarket.com")
+            client = PolymarketClient(http, gamma_base_url="https://gamma-api.polymarket.com", min_volume_24h=0)
             contracts = await client.fetch_markets()
 
         assert contracts[0].volume_24h == 0.0
