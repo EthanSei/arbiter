@@ -1,4 +1,4 @@
-.PHONY: install dev lint format test typecheck check clean run train
+.PHONY: install dev lint format test typecheck check clean run train integrate
 
 install:
 	pip install -e .
@@ -33,3 +33,6 @@ run:
 
 train:
 	python -m arbiter.training.train
+
+integrate:
+	pytest -m integration -v tests/test_integration.py

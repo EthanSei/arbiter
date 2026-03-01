@@ -41,6 +41,10 @@ select = ["E", "F", "I", "N", "UP", "B", "SIM"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "integration: calls real external APIs — run with: pytest -m integration",
+]
+addopts = "-m 'not integration'"
 
 [tool.mypy]
 python_version = "3.12"

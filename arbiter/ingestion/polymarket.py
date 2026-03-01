@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any
 
@@ -10,12 +11,17 @@ import httpx
 from arbiter.ingestion.base import Contract, MarketClient
 
 _SPREAD_ESTIMATE = 0.02  # Approximate half-spread for bid/ask estimation
+# Server-side pre-filter: markets with < $10k all-time volume are almost certainly
+# inactive or illiquid.
+_MIN_TOTAL_VOLUME_PREFILTER = 10_000.0
 
 
 class PolymarketClient(MarketClient):
     """Fetches and normalizes market data from the Polymarket Gamma API.
 
-    Uses offset-based pagination. Rate limited to 60 requests/minute.
+    Issues a single request sorted by 24h volume descending. The API returns
+    only active markets with >= _MIN_TOTAL_VOLUME_PREFILTER all-time volume,
+    so the entire liquid corpus fits in one page (~20 markets at the 10k floor).
     Prices are normalized from decimal strings to floats in [0, 1].
     """
 
@@ -25,42 +31,33 @@ class PolymarketClient(MarketClient):
         *,
         gamma_base_url: str = "https://gamma-api.polymarket.com",
         min_volume_24h: float = 100.0,
-        max_markets: int = 500,
     ) -> None:
         self._http = http
         self._gamma_base = gamma_base_url.rstrip("/")
         self._min_volume_24h = min_volume_24h
-        self._max_markets = max_markets
 
-    async def fetch_markets(self, *, limit: int = 100) -> list[Contract]:
+    async def fetch_markets(self, *, limit: int = 200) -> list[Contract]:
+        params: dict[str, str | int | float] = {
+            "limit": limit,
+            "active": "true",
+            "closed": "false",
+            "order": "volume24hr",
+            "ascending": "false",
+            "volume_num_min": _MIN_TOTAL_VOLUME_PREFILTER,
+        }
+        resp = await self._http.get(f"{self._gamma_base}/markets", params=params)
+        resp.raise_for_status()
+        markets: list[dict[str, Any]] = resp.json()
+
         contracts: list[Contract] = []
-        offset = 0
-        while True:
-            params: dict[str, str | int | float] = {
-                "limit": limit,
-                "offset": offset,
-                "active": "true",
-                "volume_num_min": self._min_volume_24h,
-            }
-            resp = await self._http.get(f"{self._gamma_base}/markets", params=params)
-            resp.raise_for_status()
-            markets: list[dict[str, Any]] = resp.json()
-
-            if not markets:
-                break
-
-            for m in markets:
-                if m.get("closed") or not m.get("accepting_orders", True):
-                    continue
-                if float(m.get("volume24hr") or 0) < self._min_volume_24h:
-                    continue
-                contract = self._parse_market(m)
-                if contract is not None:
-                    contracts.append(contract)
-
-            if len(markets) < limit or len(contracts) >= self._max_markets:
-                break
-            offset += len(markets)
+        for m in markets:
+            if m.get("closed") or not m.get("acceptingOrders", True):
+                continue
+            if _safe_float(m.get("volume24hr")) < self._min_volume_24h:
+                continue
+            contract = self._parse_market(m)
+            if contract is not None:
+                contracts.append(contract)
         return contracts
 
     async def close(self) -> None:
@@ -68,25 +65,26 @@ class PolymarketClient(MarketClient):
 
     @staticmethod
     def _parse_market(m: dict[str, Any]) -> Contract | None:
-        tokens: list[dict[str, Any]] = m.get("tokens", [])
-        yes_price = _extract_token_price(tokens, "Yes")
-        no_price = _extract_token_price(tokens, "No")
+        outcomes = _parse_json_list(m.get("outcomes"))
+        prices = _parse_json_list(m.get("outcomePrices"))
+        yes_price = _extract_outcome_price(outcomes, prices, "Yes")
+        no_price = _extract_outcome_price(outcomes, prices, "No")
         if yes_price is None:
             return None
         if no_price is None:
             no_price = 1.0 - yes_price
 
         expires_at = None
-        end_date = m.get("end_date")
+        end_date = m.get("endDate")
         if end_date:
             expires_at = datetime.fromisoformat(str(end_date).replace("Z", "+00:00"))
 
-        slug = str(m.get("market_slug", ""))
+        slug = str(m.get("slug", ""))
         url = f"https://polymarket.com/event/{slug}" if slug else ""
 
         return Contract(
             source="polymarket",
-            contract_id=str(m.get("condition_id", "")),
+            contract_id=str(m.get("conditionId", "")),
             title=str(m.get("question", "")),
             category=str(m.get("category", "")),
             yes_price=yes_price,
@@ -111,11 +109,23 @@ def _safe_float(val: Any) -> float:
         return 0.0
 
 
-def _extract_token_price(tokens: list[dict[str, Any]], outcome: str) -> float | None:
-    for t in tokens:
-        if str(t.get("outcome", "")).lower() == outcome.lower():
+def _parse_json_list(val: Any) -> list:
+    """Return val as a list, parsing JSON strings if needed."""
+    if isinstance(val, list):
+        return val
+    if isinstance(val, str):
+        try:
+            return json.loads(val)
+        except json.JSONDecodeError:
+            return []
+    return []
+
+
+def _extract_outcome_price(outcomes: list, prices: list, outcome: str) -> float | None:
+    for i, o in enumerate(outcomes):
+        if str(o).lower() == outcome.lower():
             try:
-                return float(t["price"])
-            except (KeyError, ValueError, TypeError):
+                return float(prices[i])
+            except (IndexError, ValueError, TypeError):
                 return None
     return None

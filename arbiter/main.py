@@ -17,6 +17,7 @@ from arbiter.db.session import async_session_factory, engine, init_db
 from arbiter.health import start_health_server
 from arbiter.ingestion.kalshi import KalshiClient
 from arbiter.ingestion.polymarket import PolymarketClient
+from arbiter.ingestion.rate_limiter import RateLimitedClient
 from arbiter.models.lgbm import LGBMEstimator
 from arbiter.scheduler import ScanPipeline
 
@@ -37,8 +38,20 @@ async def main() -> None:
     kalshi_http = httpx.AsyncClient(timeout=30.0)
     poly_http = httpx.AsyncClient(timeout=30.0)
 
-    kalshi = KalshiClient(kalshi_http, base_url=settings.kalshi_api_base, max_markets=settings.max_markets_per_poll)
-    polymarket = PolymarketClient(poly_http, gamma_base_url=settings.polymarket_gamma_base, max_markets=settings.max_markets_per_poll)
+    # Kalshi's public API rate-limits rapid pagination; 20 RPM keeps requests ~3 s apart.
+    kalshi_rl = RateLimitedClient(kalshi_http, rpm=20)
+    kalshi = KalshiClient(
+        kalshi_rl,
+        base_url=settings.kalshi_api_base,
+        max_markets=settings.max_markets_per_poll,
+        min_volume_24h=settings.min_volume_24h,
+        max_empty_pages=settings.kalshi_max_empty_pages,
+    )
+    polymarket = PolymarketClient(
+        poly_http,
+        gamma_base_url=settings.polymarket_gamma_base,
+        min_volume_24h=settings.min_volume_24h,
+    )
 
     # LGBMEstimator falls back to market midpoint when model file is absent.
     model_path: str | None = settings.model_weights_path

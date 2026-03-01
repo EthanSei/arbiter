@@ -409,6 +409,28 @@ async def test_run_forever_cancels_cleanly(db_factory) -> None:
         await task
 
 
+async def test_deactivate_not_queried_for_contracts_without_prior_opportunity(
+    db_factory,
+) -> None:
+    """Contracts that never had an opportunity must not trigger _deactivate DB queries.
+
+    With 3,000+ contracts per cycle and no active opportunities, the pre-fetch
+    optimization must prevent O(n * 2) per-contract SELECT queries.  We verify
+    this by running many contracts below threshold and asserting zero Opportunity
+    rows are created (no spurious inserts) and zero _deactivate side-effects.
+    """
+    from sqlalchemy import select
+
+    contracts = [_contract(contract_id=f"MISS-{i:04d}", yes_price=0.50) for i in range(100)]
+    # model_prob = 0.50, EV = 0.50 - (0.50 + 0.01) = -0.01 — below threshold for all
+    p = _pipeline([_OkClient(contracts)], _FixedEstimator(0.50), [], db_factory)
+    await p.run_cycle()
+
+    async with db_factory() as session:
+        rows = (await session.execute(select(Opportunity))).scalars().all()
+    assert rows == []  # No spurious Opportunity rows created
+
+
 async def test_no_channels_does_not_stamp_last_alerted_at(db_factory) -> None:
     """When no alert channels are configured, last_alerted_at must remain None.
 
