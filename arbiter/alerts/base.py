@@ -17,6 +17,11 @@ class AlertChannel(ABC):
         """Send an alert about a scored opportunity."""
         ...
 
+    @abstractmethod
+    async def close(self) -> None:
+        """Release any underlying resources (e.g. httpx client)."""
+        ...
+
     def format_message(self, opp: ScoredOpportunity) -> str:
         """Default plain-text formatting for an opportunity alert."""
         return (
