@@ -11,9 +11,11 @@ class TestConfigValidation:
         with pytest.raises(ValidationError):
             Settings(poll_interval_seconds=0)
 
-    def test_ev_threshold_must_be_non_negative(self):
+    def test_ev_threshold_must_be_positive(self):
         with pytest.raises(ValidationError):
             Settings(ev_threshold=-0.01)
+        with pytest.raises(ValidationError):
+            Settings(ev_threshold=0.0)
 
     def test_kelly_fraction_must_be_in_unit_interval(self):
         with pytest.raises(ValidationError):

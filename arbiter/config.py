@@ -29,7 +29,7 @@ class Settings(BaseSettings):
 
     # Scanning parameters
     poll_interval_seconds: int = Field(default=300, gt=0)
-    ev_threshold: float = Field(default=0.05, ge=0)
+    ev_threshold: float = Field(default=0.05, gt=0)
     kelly_fraction: float = Field(default=0.25, gt=0, le=1)
     max_markets_per_poll: int = Field(default=200, gt=0)
     fee_rate: float = Field(default=0.01, ge=0)
