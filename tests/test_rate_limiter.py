@@ -121,6 +121,24 @@ class TestRateLimitedClient429Handling:
             resp = await rl.get("https://example.com/api")
             assert resp.status_code == 429
 
+    async def test_http_date_retry_after_uses_default(self):
+        """HTTP-date format in Retry-After header falls back to default instead of crashing."""
+        call_count = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return httpx.Response(429, headers={"Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT"})
+            return httpx.Response(200, json={"ok": True})
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            rl = RateLimitedClient(client, rpm=60)
+            resp = await rl.get("https://example.com/api")
+        assert resp.status_code == 200
+        assert call_count == 2
+
 
 class TestRateLimitedClientTokenRefill:
     async def test_tokens_refill_over_time(self):

@@ -407,3 +407,25 @@ async def test_run_forever_cancels_cleanly(db_factory) -> None:
     task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await task
+
+
+async def test_no_channels_does_not_stamp_last_alerted_at(db_factory) -> None:
+    """When no alert channels are configured, last_alerted_at must remain None.
+
+    Stamping it would suppress re-alerting once channels are added, even though
+    no alert was ever delivered.
+    """
+    from sqlalchemy import select
+
+    p = _pipeline(
+        [_OkClient([_contract(yes_price=0.30)])],
+        _FixedEstimator(0.70),
+        [],  # no channels
+        db_factory,
+    )
+    await p.run_cycle()
+
+    async with db_factory() as session:
+        rows = (await session.execute(select(Opportunity))).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].last_alerted_at is None

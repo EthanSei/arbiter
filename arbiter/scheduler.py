@@ -196,8 +196,9 @@ class ScanPipeline:
             session.add(log)
 
         # Only stamp last_alerted_at when at least one channel delivered the alert.
-        # If all channels fail, leaving it unset allows retry on the next cycle.
-        if any_succeeded or not self._channels:
+        # If all channels fail (or none are configured), leaving it unset allows
+        # retry once channels are available.
+        if any_succeeded:
             db_opp.last_alerted_at = now
 
     async def _snapshot(self, session: AsyncSession, contract: Contract) -> None:

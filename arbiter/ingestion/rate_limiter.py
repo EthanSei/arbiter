@@ -46,7 +46,10 @@ class RateLimitedClient:
             resp: httpx.Response = await call(url, **kwargs)
             if resp.status_code != 429:
                 return resp
-            retry_after = float(resp.headers.get("Retry-After", _DEFAULT_RETRY_AFTER))
+            try:
+                retry_after = float(resp.headers.get("Retry-After", _DEFAULT_RETRY_AFTER))
+            except ValueError:
+                retry_after = _DEFAULT_RETRY_AFTER
             await asyncio.sleep(retry_after)
             await self._acquire()
         # Final attempt — still rate-limited

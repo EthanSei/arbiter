@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import signal
 from pathlib import Path
 
 import httpx
@@ -12,7 +13,7 @@ import httpx
 from arbiter.alerts.base import AlertChannel
 from arbiter.alerts.discord import DiscordChannel
 from arbiter.config import settings
-from arbiter.db.session import async_session_factory, init_db
+from arbiter.db.session import async_session_factory, engine, init_db
 from arbiter.health import start_health_server
 from arbiter.ingestion.kalshi import KalshiClient
 from arbiter.ingestion.polymarket import PolymarketClient
@@ -59,8 +60,14 @@ async def main() -> None:
 
     health_task = asyncio.create_task(start_health_server(settings.health_port))
 
+    # Register SIGTERM handler so Cloud Run graceful shutdown cancels the loop.
+    loop = asyncio.get_running_loop()
+    pipeline_task = asyncio.create_task(pipeline.run_forever(settings.poll_interval_seconds))
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, pipeline_task.cancel)
+
     try:
-        await pipeline.run_forever(settings.poll_interval_seconds)
+        await pipeline_task
     except asyncio.CancelledError:
         logger.info("Scan loop cancelled — shutting down")
     finally:
@@ -72,5 +79,6 @@ async def main() -> None:
         await poly_http.aclose()
         for channel in channels:
             await channel.close()
+        await engine.dispose()
 
         logger.info("Arbiter shutdown complete")
