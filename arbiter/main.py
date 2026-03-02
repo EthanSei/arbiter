@@ -15,6 +15,7 @@ from arbiter.alerts.discord import DiscordChannel
 from arbiter.config import settings
 from arbiter.db.session import async_session_factory, engine, init_db
 from arbiter.health import start_health_server
+from arbiter.ingestion.base import MarketClient
 from arbiter.ingestion.kalshi import KalshiClient
 from arbiter.ingestion.polymarket import PolymarketClient
 from arbiter.ingestion.rate_limiter import RateLimitedClient
@@ -37,7 +38,6 @@ async def main() -> None:
 
     # Each client borrows its own HTTP connection; closed in finally block.
     kalshi_http = httpx.AsyncClient(timeout=30.0)
-    poly_http = httpx.AsyncClient(timeout=30.0)
 
     # Kalshi's public API rate-limits rapid pagination; 20 RPM keeps requests ~3 s apart.
     kalshi_rl = RateLimitedClient(kalshi_http, rpm=20)
@@ -54,11 +54,17 @@ async def main() -> None:
         max_empty_pages=settings.kalshi_max_empty_pages,
         series_tickers=series_tickers,
     )
-    polymarket = PolymarketClient(
-        poly_http,
-        gamma_base_url=settings.polymarket_gamma_base,
-        min_volume_24h=settings.min_volume_24h,
-    )
+
+    clients: list[MarketClient] = [kalshi]
+    poly_http: httpx.AsyncClient | None = None
+    if settings.polymarket_enabled:
+        poly_http = httpx.AsyncClient(timeout=30.0)
+        polymarket = PolymarketClient(
+            poly_http,
+            gamma_base_url=settings.polymarket_gamma_base,
+            min_volume_24h=settings.min_volume_24h,
+        )
+        clients.append(polymarket)
 
     # LGBMEstimator falls back to market midpoint when model file is absent.
     model_path: str | None = settings.model_weights_path
@@ -78,7 +84,7 @@ async def main() -> None:
     )
 
     pipeline = ScanPipeline(
-        clients=[kalshi, polymarket],
+        clients=clients,
         estimator=estimator,
         channels=channels,
         session_factory=async_session_factory,
@@ -105,7 +111,8 @@ async def main() -> None:
             await health_task
 
         await kalshi_http.aclose()
-        await poly_http.aclose()
+        if poly_http is not None:
+            await poly_http.aclose()
         for channel in channels:
             await channel.close()
         await engine.dispose()

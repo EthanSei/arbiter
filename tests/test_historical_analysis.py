@@ -5,8 +5,10 @@ from __future__ import annotations
 import pytest
 
 from arbiter.analysis.historical import (
+    MispricingEpisode,
     SeriesAnalysis,
     SettledMarket,
+    analyze_mispricing_duration,
     analyze_series,
     brier_score,
     detect_bracket_families,
@@ -666,3 +668,310 @@ class TestAnalyzeSeries:
         result = analyze_series("EXTREME", markets)
         assert result.midrange_count == 0
         assert result.surprise_rate == 0.0
+
+
+# ===========================================================================
+# TestMispricingEpisode
+# ===========================================================================
+
+
+class TestMispricingEpisode:
+    def test_frozen_dataclass(self) -> None:
+        """MispricingEpisode should be immutable."""
+        ep = MispricingEpisode(
+            ticker="KXBTC-26MAR14-T100000",
+            start_ts=1709300400,
+            end_ts=1709304000,
+            duration_minutes=60,
+            peak_deviation=0.10,
+            direction="overpriced",
+        )
+        with pytest.raises(AttributeError):
+            ep.ticker = "mutated"  # type: ignore[misc]
+
+    def test_fields(self) -> None:
+        """MispricingEpisode should store all fields correctly."""
+        ep = MispricingEpisode(
+            ticker="KXBTC-26MAR14-T100000",
+            start_ts=1709300400,
+            end_ts=1709307600,
+            duration_minutes=120,
+            peak_deviation=0.15,
+            direction="underpriced",
+        )
+        assert ep.ticker == "KXBTC-26MAR14-T100000"
+        assert ep.start_ts == 1709300400
+        assert ep.end_ts == 1709307600
+        assert ep.duration_minutes == 120
+        assert ep.peak_deviation == pytest.approx(0.15)
+        assert ep.direction == "underpriced"
+
+
+# ===========================================================================
+# TestAnalyzeMispricingDuration
+# ===========================================================================
+
+# Candlestick fixtures for mispricing analysis.
+# Each candlestick has 60-minute intervals (period_interval=60).
+# Timestamps are spaced 3600s apart.
+
+CANDLES_OVERPRICED = [
+    # Fair value = 0.50, threshold = 0.05
+    # Candle 1: close=0.50 -> no deviation (within threshold)
+    {
+        "end_period_ts": 1709300400,
+        "yes_price": {"open": 0.48, "high": 0.52, "low": 0.47, "close": 0.50},
+        "volume": 100,
+    },
+    # Candle 2: close=0.58 -> overpriced by 0.08 (>0.05) - episode starts
+    {
+        "end_period_ts": 1709304000,
+        "yes_price": {"open": 0.52, "high": 0.60, "low": 0.51, "close": 0.58},
+        "volume": 200,
+    },
+    # Candle 3: close=0.62 -> overpriced by 0.12 - episode continues, peak deviation
+    {
+        "end_period_ts": 1709307600,
+        "yes_price": {"open": 0.58, "high": 0.65, "low": 0.56, "close": 0.62},
+        "volume": 150,
+    },
+    # Candle 4: close=0.51 -> back within threshold - episode ends
+    {
+        "end_period_ts": 1709311200,
+        "yes_price": {"open": 0.60, "high": 0.61, "low": 0.49, "close": 0.51},
+        "volume": 300,
+    },
+]
+
+CANDLES_UNDERPRICED = [
+    # Fair value = 0.70, threshold = 0.05
+    # Candle 1: close=0.63 -> underpriced by 0.07 (>0.05) - episode starts
+    {
+        "end_period_ts": 1709300400,
+        "yes_price": {"open": 0.65, "high": 0.66, "low": 0.60, "close": 0.63},
+        "volume": 100,
+    },
+    # Candle 2: close=0.60 -> underpriced by 0.10 - peak
+    {
+        "end_period_ts": 1709304000,
+        "yes_price": {"open": 0.63, "high": 0.64, "low": 0.58, "close": 0.60},
+        "volume": 200,
+    },
+    # Candle 3: close=0.68 -> back within threshold - episode ends
+    {
+        "end_period_ts": 1709307600,
+        "yes_price": {"open": 0.62, "high": 0.70, "low": 0.61, "close": 0.68},
+        "volume": 150,
+    },
+]
+
+CANDLES_MULTIPLE_EPISODES = [
+    # Fair value = 0.50, threshold = 0.05
+    # Candle 1: close=0.58 -> overpriced episode 1 starts
+    {
+        "end_period_ts": 1709300400,
+        "yes_price": {"open": 0.50, "high": 0.60, "low": 0.49, "close": 0.58},
+        "volume": 100,
+    },
+    # Candle 2: close=0.50 -> back to fair value, episode 1 ends
+    {
+        "end_period_ts": 1709304000,
+        "yes_price": {"open": 0.58, "high": 0.58, "low": 0.48, "close": 0.50},
+        "volume": 200,
+    },
+    # Candle 3: close=0.42 -> underpriced episode 2 starts
+    {
+        "end_period_ts": 1709307600,
+        "yes_price": {"open": 0.50, "high": 0.51, "low": 0.40, "close": 0.42},
+        "volume": 150,
+    },
+    # Candle 4: close=0.40 -> still underpriced, peak deviation
+    {
+        "end_period_ts": 1709311200,
+        "yes_price": {"open": 0.42, "high": 0.44, "low": 0.38, "close": 0.40},
+        "volume": 300,
+    },
+    # Candle 5: close=0.49 -> back within threshold, episode 2 ends
+    {
+        "end_period_ts": 1709314800,
+        "yes_price": {"open": 0.40, "high": 0.52, "low": 0.39, "close": 0.49},
+        "volume": 250,
+    },
+]
+
+CANDLES_NO_MISPRICING = [
+    # Fair value = 0.50, threshold = 0.05 -> all close prices within 0.05
+    {
+        "end_period_ts": 1709300400,
+        "yes_price": {"open": 0.49, "high": 0.53, "low": 0.47, "close": 0.51},
+        "volume": 100,
+    },
+    {
+        "end_period_ts": 1709304000,
+        "yes_price": {"open": 0.51, "high": 0.54, "low": 0.48, "close": 0.52},
+        "volume": 200,
+    },
+    {
+        "end_period_ts": 1709307600,
+        "yes_price": {"open": 0.52, "high": 0.55, "low": 0.46, "close": 0.49},
+        "volume": 150,
+    },
+]
+
+
+class TestAnalyzeMispricingDuration:
+    def test_detects_overpriced_episode(self) -> None:
+        """Should detect a period where market was overpriced above threshold."""
+        episodes = analyze_mispricing_duration(
+            CANDLES_OVERPRICED,
+            fair_value=0.50,
+            threshold=0.05,
+        )
+
+        assert len(episodes) == 1
+        ep = episodes[0]
+        assert ep.direction == "overpriced"
+        assert ep.start_ts == 1709304000
+        assert ep.end_ts == 1709307600
+        assert ep.duration_minutes == 60
+        assert ep.peak_deviation == pytest.approx(0.12)
+
+    def test_detects_underpriced_episode(self) -> None:
+        """Should detect a period where market was underpriced below threshold."""
+        episodes = analyze_mispricing_duration(
+            CANDLES_UNDERPRICED,
+            fair_value=0.70,
+            threshold=0.05,
+        )
+
+        assert len(episodes) == 1
+        ep = episodes[0]
+        assert ep.direction == "underpriced"
+        assert ep.start_ts == 1709300400
+        assert ep.end_ts == 1709304000
+        assert ep.duration_minutes == 60
+        assert ep.peak_deviation == pytest.approx(0.10)
+
+    def test_detects_multiple_episodes(self) -> None:
+        """Should detect multiple separate mispricing episodes."""
+        episodes = analyze_mispricing_duration(
+            CANDLES_MULTIPLE_EPISODES,
+            fair_value=0.50,
+            threshold=0.05,
+        )
+
+        assert len(episodes) == 2
+        assert episodes[0].direction == "overpriced"
+        assert episodes[1].direction == "underpriced"
+
+    def test_multiple_episodes_durations(self) -> None:
+        """Each episode should have correct duration."""
+        episodes = analyze_mispricing_duration(
+            CANDLES_MULTIPLE_EPISODES,
+            fair_value=0.50,
+            threshold=0.05,
+        )
+
+        # Episode 1: single candle overpriced (1709300400 only)
+        assert episodes[0].duration_minutes == 0  # single point
+        # Episode 2: two candles underpriced (1709307600 to 1709311200)
+        assert episodes[1].duration_minutes == 60
+
+    def test_multiple_episodes_peak_deviations(self) -> None:
+        """Peak deviation should be the max absolute distance from fair value."""
+        episodes = analyze_mispricing_duration(
+            CANDLES_MULTIPLE_EPISODES,
+            fair_value=0.50,
+            threshold=0.05,
+        )
+
+        assert episodes[0].peak_deviation == pytest.approx(0.08)  # 0.58 - 0.50
+        assert episodes[1].peak_deviation == pytest.approx(0.10)  # 0.50 - 0.40
+
+    def test_no_mispricing(self) -> None:
+        """Should return empty list when no prices deviate beyond threshold."""
+        episodes = analyze_mispricing_duration(
+            CANDLES_NO_MISPRICING,
+            fair_value=0.50,
+            threshold=0.05,
+        )
+
+        assert episodes == []
+
+    def test_empty_candlesticks(self) -> None:
+        """Should return empty list for empty candlestick data."""
+        episodes = analyze_mispricing_duration([], fair_value=0.50, threshold=0.05)
+        assert episodes == []
+
+    def test_ticker_passed_through(self) -> None:
+        """Ticker parameter should be passed through to episodes."""
+        episodes = analyze_mispricing_duration(
+            CANDLES_OVERPRICED,
+            fair_value=0.50,
+            threshold=0.05,
+            ticker="KXBTC-26MAR14-T100000",
+        )
+
+        assert len(episodes) == 1
+        assert episodes[0].ticker == "KXBTC-26MAR14-T100000"
+
+    def test_default_ticker_is_empty(self) -> None:
+        """Default ticker should be empty string."""
+        episodes = analyze_mispricing_duration(
+            CANDLES_OVERPRICED,
+            fair_value=0.50,
+            threshold=0.05,
+        )
+
+        assert episodes[0].ticker == ""
+
+    def test_high_threshold_no_episodes(self) -> None:
+        """High threshold should filter out minor deviations."""
+        episodes = analyze_mispricing_duration(
+            CANDLES_OVERPRICED,
+            fair_value=0.50,
+            threshold=0.20,
+        )
+
+        assert episodes == []
+
+    def test_zero_threshold_catches_all_deviations(self) -> None:
+        """Zero threshold should catch any deviation from fair value."""
+        episodes = analyze_mispricing_duration(
+            CANDLES_NO_MISPRICING,
+            fair_value=0.50,
+            threshold=0.0,
+        )
+
+        # All candles deviate from 0.50: 0.51, 0.52, 0.49
+        # This forms one continuous episode since they all deviate
+        assert len(episodes) >= 1
+
+    def test_episode_at_end_of_data(self) -> None:
+        """Episode that runs to the end of candlestick data should be captured."""
+        # The last two candles are overpriced and data ends
+        candles = [
+            {
+                "end_period_ts": 1709300400,
+                "yes_price": {"open": 0.50, "high": 0.52, "low": 0.48, "close": 0.50},
+                "volume": 100,
+            },
+            {
+                "end_period_ts": 1709304000,
+                "yes_price": {"open": 0.52, "high": 0.62, "low": 0.51, "close": 0.60},
+                "volume": 200,
+            },
+            {
+                "end_period_ts": 1709307600,
+                "yes_price": {"open": 0.60, "high": 0.68, "low": 0.58, "close": 0.65},
+                "volume": 150,
+            },
+        ]
+        episodes = analyze_mispricing_duration(candles, fair_value=0.50, threshold=0.05)
+
+        assert len(episodes) == 1
+        ep = episodes[0]
+        assert ep.direction == "overpriced"
+        assert ep.end_ts == 1709307600  # last candle timestamp
+        assert ep.peak_deviation == pytest.approx(0.15)  # 0.65 - 0.50
+        assert ep.duration_minutes == 60  # 2 candles

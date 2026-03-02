@@ -41,6 +41,107 @@ class SeriesAnalysis:
     avg_bracket_size: float  # average markets per bracket family
 
 
+@dataclass(frozen=True)
+class MispricingEpisode:
+    """A period where a market was mispriced (deviated from anchor/fair value)."""
+
+    ticker: str
+    start_ts: int
+    end_ts: int
+    duration_minutes: int
+    peak_deviation: float  # max distance from fair value during episode
+    direction: str  # "overpriced" or "underpriced"
+
+
+def analyze_mispricing_duration(
+    candlesticks: list[dict[str, Any]],
+    fair_value: float,
+    threshold: float = 0.05,
+    ticker: str = "",
+) -> list[MispricingEpisode]:
+    """Find episodes where price deviated from fair_value by more than threshold.
+
+    Uses the yes_price close for each candlestick to detect deviations.
+    An episode starts when |close - fair_value| > threshold and ends when the
+    deviation returns within threshold. Duration is computed from timestamps.
+
+    Args:
+        candlesticks: List of candlestick dicts from Kalshi API.
+        fair_value: The anchor/fair probability to measure deviation from.
+        threshold: Minimum absolute deviation to count as mispriced.
+        ticker: Market ticker to attach to episodes.
+
+    Returns:
+        List of MispricingEpisode sorted chronologically.
+    """
+    if not candlesticks:
+        return []
+
+    episodes: list[MispricingEpisode] = []
+
+    # Track current episode state
+    episode_start_ts: int | None = None
+    episode_peak: float = 0.0
+    episode_direction: str = ""
+    episode_timestamps: list[int] = []
+
+    for candle in candlesticks:
+        ts = candle["end_period_ts"]
+        close = candle["yes_price"]["close"]
+        deviation = close - fair_value
+
+        if abs(deviation) > threshold:
+            direction = "overpriced" if deviation > 0 else "underpriced"
+            if episode_start_ts is None:
+                # Start new episode
+                episode_start_ts = ts
+                episode_peak = abs(deviation)
+                episode_direction = direction
+                episode_timestamps = [ts]
+            else:
+                # Continue existing episode
+                episode_peak = max(episode_peak, abs(deviation))
+                episode_timestamps.append(ts)
+        else:
+            if episode_start_ts is not None:
+                # End current episode
+                end_ts = episode_timestamps[-1]
+                duration_seconds = end_ts - episode_start_ts
+                duration_minutes = duration_seconds // 60
+                episodes.append(
+                    MispricingEpisode(
+                        ticker=ticker,
+                        start_ts=episode_start_ts,
+                        end_ts=end_ts,
+                        duration_minutes=duration_minutes,
+                        peak_deviation=episode_peak,
+                        direction=episode_direction,
+                    )
+                )
+                episode_start_ts = None
+                episode_peak = 0.0
+                episode_direction = ""
+                episode_timestamps = []
+
+    # Close any open episode at end of data
+    if episode_start_ts is not None:
+        end_ts = episode_timestamps[-1]
+        duration_seconds = end_ts - episode_start_ts
+        duration_minutes = duration_seconds // 60
+        episodes.append(
+            MispricingEpisode(
+                ticker=ticker,
+                start_ts=episode_start_ts,
+                end_ts=end_ts,
+                duration_minutes=duration_minutes,
+                peak_deviation=episode_peak,
+                direction=episode_direction,
+            )
+        )
+
+    return episodes
+
+
 def parse_settled_market(raw: dict[str, Any]) -> SettledMarket | None:
     """Convert a raw Kalshi API dict to a SettledMarket.
 

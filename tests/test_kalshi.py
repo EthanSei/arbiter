@@ -644,3 +644,269 @@ class TestKalshiClientClose:
         async with httpx.AsyncClient(transport=transport) as http:
             client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
             await client.close()  # Should not raise
+
+
+# --- Candlestick API fixtures ---
+
+CANDLESTICK_RESPONSE = {
+    "candlesticks": [
+        {
+            "end_period_ts": 1709300400,
+            "yes_price": {"open": 0.55, "high": 0.60, "low": 0.52, "close": 0.58},
+            "no_price": {"open": 0.45, "high": 0.48, "low": 0.40, "close": 0.42},
+            "volume": 1200,
+        },
+        {
+            "end_period_ts": 1709304000,
+            "yes_price": {"open": 0.58, "high": 0.65, "low": 0.57, "close": 0.63},
+            "no_price": {"open": 0.42, "high": 0.43, "low": 0.35, "close": 0.37},
+            "volume": 850,
+        },
+    ],
+}
+
+CANDLESTICK_EMPTY = {"candlesticks": []}
+
+CANDLESTICK_BATCH_RESPONSE = {
+    "candlesticks": {
+        "KXBTC-26MAR14-T100000": [
+            {
+                "end_period_ts": 1709300400,
+                "yes_price": {"open": 0.55, "high": 0.60, "low": 0.52, "close": 0.58},
+                "no_price": {"open": 0.45, "high": 0.48, "low": 0.40, "close": 0.42},
+                "volume": 1200,
+            },
+        ],
+        "KXFED-26MAR-T425": [
+            {
+                "end_period_ts": 1709300400,
+                "yes_price": {"open": 0.40, "high": 0.44, "low": 0.38, "close": 0.42},
+                "no_price": {"open": 0.60, "high": 0.62, "low": 0.56, "close": 0.58},
+                "volume": 500,
+            },
+        ],
+    },
+}
+
+
+def _candlestick_transport(
+    response: dict, *, expected_path: str | None = None
+) -> tuple[httpx.MockTransport, list]:
+    """Transport for candlestick endpoints that records requests."""
+    request_log: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_log.append(request)
+        if expected_path and expected_path not in str(request.url):
+            return httpx.Response(404)
+        return httpx.Response(200, json=response)
+
+    return httpx.MockTransport(handler), request_log
+
+
+class TestKalshiClientFetchCandlesticks:
+    async def test_returns_candlestick_list(self):
+        """Should return a list of candlestick dicts."""
+        transport, _ = _candlestick_transport(CANDLESTICK_RESPONSE)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            result = await client.fetch_candlesticks("KXBTC-26MAR14-T100000", series_ticker="KXBTC")
+
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert result[0]["end_period_ts"] == 1709300400
+        assert result[0]["yes_price"]["close"] == 0.58
+        assert result[0]["volume"] == 1200
+
+    async def test_sends_correct_url_path(self):
+        """Should use /series/{series_ticker}/markets/{ticker}/candlesticks."""
+        transport, requests = _candlestick_transport(CANDLESTICK_RESPONSE)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            await client.fetch_candlesticks("KXBTC-26MAR14-T100000", series_ticker="KXBTC")
+
+        url = str(requests[0].url)
+        assert "/series/KXBTC/markets/KXBTC-26MAR14-T100000/candlesticks" in url
+
+    async def test_sends_period_interval_param(self):
+        """Should send period_interval as a query parameter."""
+        transport, requests = _candlestick_transport(CANDLESTICK_RESPONSE)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            await client.fetch_candlesticks(
+                "KXBTC-26MAR14-T100000",
+                series_ticker="KXBTC",
+                period_interval=1440,
+            )
+
+        params = requests[0].url.params
+        assert params["period_interval"] == "1440"
+
+    async def test_default_period_interval_is_60(self):
+        """Default period_interval should be 60 (1hr)."""
+        transport, requests = _candlestick_transport(CANDLESTICK_RESPONSE)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            await client.fetch_candlesticks("KXBTC-26MAR14-T100000", series_ticker="KXBTC")
+
+        params = requests[0].url.params
+        assert params["period_interval"] == "60"
+
+    async def test_sends_time_range_params(self):
+        """Should send start_ts and end_ts when provided."""
+        transport, requests = _candlestick_transport(CANDLESTICK_RESPONSE)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            await client.fetch_candlesticks(
+                "KXBTC-26MAR14-T100000",
+                series_ticker="KXBTC",
+                start_ts=1709200000,
+                end_ts=1709400000,
+            )
+
+        params = requests[0].url.params
+        assert params["start_ts"] == "1709200000"
+        assert params["end_ts"] == "1709400000"
+
+    async def test_omits_time_params_when_none(self):
+        """Should not send start_ts/end_ts when not provided."""
+        transport, requests = _candlestick_transport(CANDLESTICK_RESPONSE)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            await client.fetch_candlesticks("KXBTC-26MAR14-T100000", series_ticker="KXBTC")
+
+        params = requests[0].url.params
+        assert "start_ts" not in params
+        assert "end_ts" not in params
+
+    async def test_empty_response(self):
+        """Should return empty list when no candlesticks."""
+        transport, _ = _candlestick_transport(CANDLESTICK_EMPTY)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            result = await client.fetch_candlesticks("KXBTC-26MAR14-T100000", series_ticker="KXBTC")
+
+        assert result == []
+
+    async def test_raises_on_http_error(self):
+        """Should raise on non-200 status."""
+        transport = httpx.MockTransport(lambda _req: httpx.Response(500))
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            with pytest.raises(httpx.HTTPStatusError):
+                await client.fetch_candlesticks("KXBTC-26MAR14-T100000", series_ticker="KXBTC")
+
+
+class TestKalshiClientFetchCandlesticksBatch:
+    async def test_returns_dict_of_ticker_to_candlesticks(self):
+        """Should return {ticker: [candlestick, ...]} dict."""
+        transport, _ = _candlestick_transport(CANDLESTICK_BATCH_RESPONSE)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            result = await client.fetch_candlesticks_batch(
+                ["KXBTC-26MAR14-T100000", "KXFED-26MAR-T425"]
+            )
+
+        assert isinstance(result, dict)
+        assert len(result) == 2
+        assert "KXBTC-26MAR14-T100000" in result
+        assert "KXFED-26MAR-T425" in result
+        assert len(result["KXBTC-26MAR14-T100000"]) == 1
+        assert result["KXBTC-26MAR14-T100000"][0]["volume"] == 1200
+
+    async def test_sends_correct_url_path(self):
+        """Should use /markets/candlesticks batch endpoint."""
+        transport, requests = _candlestick_transport(CANDLESTICK_BATCH_RESPONSE)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            await client.fetch_candlesticks_batch(["KXBTC-26MAR14-T100000", "KXFED-26MAR-T425"])
+
+        url = str(requests[0].url)
+        assert "/markets/candlesticks" in url
+
+    async def test_sends_tickers_as_comma_separated(self):
+        """Should send tickers as comma-separated query param."""
+        transport, requests = _candlestick_transport(CANDLESTICK_BATCH_RESPONSE)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            await client.fetch_candlesticks_batch(["KXBTC-26MAR14-T100000", "KXFED-26MAR-T425"])
+
+        params = requests[0].url.params
+        assert params["tickers"] == "KXBTC-26MAR14-T100000,KXFED-26MAR-T425"
+
+    async def test_sends_period_interval_param(self):
+        """Should send period_interval as query param."""
+        transport, requests = _candlestick_transport(CANDLESTICK_BATCH_RESPONSE)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            await client.fetch_candlesticks_batch(["KXBTC-26MAR14-T100000"], period_interval=1440)
+
+        params = requests[0].url.params
+        assert params["period_interval"] == "1440"
+
+    async def test_sends_time_range_params(self):
+        """Should send start_ts and end_ts when provided."""
+        transport, requests = _candlestick_transport(CANDLESTICK_BATCH_RESPONSE)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            await client.fetch_candlesticks_batch(
+                ["KXBTC-26MAR14-T100000"],
+                start_ts=1709200000,
+                end_ts=1709400000,
+            )
+
+        params = requests[0].url.params
+        assert params["start_ts"] == "1709200000"
+        assert params["end_ts"] == "1709400000"
+
+    async def test_omits_time_params_when_none(self):
+        """Should not send start_ts/end_ts when not provided."""
+        transport, requests = _candlestick_transport(CANDLESTICK_BATCH_RESPONSE)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            await client.fetch_candlesticks_batch(["KXBTC-26MAR14-T100000"])
+
+        params = requests[0].url.params
+        assert "start_ts" not in params
+        assert "end_ts" not in params
+
+    async def test_empty_response(self):
+        """Should return empty dict when no candlesticks."""
+        transport, _ = _candlestick_transport({"candlesticks": {}})
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            result = await client.fetch_candlesticks_batch(["KXBTC-26MAR14-T100000"])
+
+        assert result == {}
+
+    async def test_raises_on_http_error(self):
+        """Should raise on non-200 status."""
+        transport = httpx.MockTransport(lambda _req: httpx.Response(500))
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            with pytest.raises(httpx.HTTPStatusError):
+                await client.fetch_candlesticks_batch(["KXBTC-26MAR14-T100000"])
+
+    async def test_chunks_large_ticker_lists(self):
+        """Should split into multiple requests when >100 tickers."""
+        tickers = [f"TICKER-{i}" for i in range(150)]
+        # Response for each chunk
+        chunk1_response = {"candlesticks": {t: [] for t in tickers[:100]}}
+        chunk2_response = {"candlesticks": {t: [] for t in tickers[100:]}}
+        page_iter = iter([chunk1_response, chunk2_response])
+        request_log: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            request_log.append(request)
+            try:
+                return httpx.Response(200, json=next(page_iter))
+            except StopIteration:
+                return httpx.Response(200, json={"candlesticks": {}})
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            result = await client.fetch_candlesticks_batch(tickers)
+
+        assert len(request_log) == 2
+        assert len(result) == 150

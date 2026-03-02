@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     kalshi_api_base: str = "https://api.elections.kalshi.com/trade-api/v2"
 
     # Polymarket
+    polymarket_enabled: bool = False
     polymarket_clob_base: str = "https://clob.polymarket.com"
     polymarket_gamma_base: str = "https://gamma-api.polymarket.com"
 
@@ -27,8 +28,8 @@ class Settings(BaseSettings):
     # Anthropic (future — not used in V1)
     anthropic_api_key: str = ""
 
-    # Targeted series (comma-separated, e.g. "KXCPI,KXPAYROLLS,KXCPIYOY")
-    kalshi_target_series: str = ""
+    # Targeted series (comma-separated Kalshi series tickers)
+    kalshi_target_series: str = "KXCPI,KXCPIYOY,KXPAYROLLS,KXCPICOREYOY,KXJOBLESSCLAIMS"
 
     # Scanning parameters
     poll_interval_seconds: int = Field(default=300, gt=0)
