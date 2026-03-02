@@ -37,6 +37,8 @@ class Opportunity(Base):
     title: Mapped[str] = mapped_column(Text)
     direction: Mapped[Direction] = mapped_column(Enum(Direction))
 
+    strategy_name: Mapped[str] = mapped_column(String(64), default="")
+
     market_price: Mapped[float] = mapped_column(Float)
     model_probability: Mapped[float] = mapped_column(Float)
     expected_value: Mapped[float] = mapped_column(Float)
@@ -98,3 +100,28 @@ class MarketSnapshot(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (Index("ix_snapshot_lookup", "contract_id", "snapshot_at"),)
+
+
+class PaperTrade(Base):
+    """A simulated trade recorded by the paper trader.
+
+    Tracks entry, exit, and P&L for backtesting strategy performance
+    without risking real capital.
+    """
+
+    __tablename__ = "paper_trades"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    source: Mapped[Source] = mapped_column(Enum(Source))
+    contract_id: Mapped[str] = mapped_column(String(256), index=True)
+    direction: Mapped[Direction] = mapped_column(Enum(Direction))
+    strategy_name: Mapped[str] = mapped_column(String(64))
+    entry_price: Mapped[float] = mapped_column(Float)
+    quantity: Mapped[float] = mapped_column(Float)
+    model_probability: Mapped[float] = mapped_column(Float)
+    expected_value: Mapped[float] = mapped_column(Float)
+    entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    exit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    exited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
+    outcome: Mapped[float | None] = mapped_column(Float, nullable=True)

@@ -254,7 +254,6 @@ class TestKalshiClientFetchMarkets:
 
         assert len(contracts) == 0
 
-
     async def test_filters_low_volume_markets(self):
         """Markets below min_volume_24h threshold are excluded."""
         low_vol = {**KALSHI_MARKET_RESPONSE["markets"][0], "volume_24h_fp": 3.0}
@@ -262,7 +261,9 @@ class TestKalshiClientFetchMarkets:
         resp = {"markets": [low_vol, high_vol], "cursor": ""}
         transport = _kalshi_transport([resp])
         async with httpx.AsyncClient(transport=transport) as http:
-            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2", min_volume_24h=5.0)
+            client = KalshiClient(
+                http, base_url="https://api.kalshi.com/trade-api/v2", min_volume_24h=5.0
+            )
             contracts = await client.fetch_markets()
 
         assert len(contracts) == 1
@@ -306,7 +307,6 @@ class TestKalshiClientFetchMarkets:
 
         assert contracts[0].url == "https://kalshi.com/markets/KXBTC-26MAR14-T100000"
 
-
     async def test_default_limit_is_1000(self):
         """Default limit must be 1000 (API max) to minimise request count."""
         transport, requests = _counting_kalshi_transport([KALSHI_MARKET_RESPONSE])
@@ -331,12 +331,14 @@ class TestKalshiClientFetchMarkets:
         dead_page = {"markets": [dead_market, dead_market], "cursor": "cursor_xyz"}
         liquid_page = KALSHI_MARKET_PAGE2  # high volume — should never be fetched
 
-        transport, requests = _counting_kalshi_transport([
-            dead_page,
-            dead_page,
-            dead_page,
-            liquid_page,  # unreachable
-        ])
+        transport, requests = _counting_kalshi_transport(
+            [
+                dead_page,
+                dead_page,
+                dead_page,
+                liquid_page,  # unreachable
+            ]
+        )
         async with httpx.AsyncClient(transport=transport) as http:
             client = KalshiClient(
                 http,
@@ -355,14 +357,16 @@ class TestKalshiClientFetchMarkets:
         dead_page = {"markets": [dead_market], "cursor": "cursor_xyz"}
         liquid_page = {"markets": [KALSHI_MARKET_RESPONSE["markets"][1]], "cursor": "cursor_abc"}
 
-        transport, requests = _counting_kalshi_transport([
-            dead_page,
-            liquid_page,   # resets counter
-            dead_page,
-            dead_page,
-            dead_page,     # 3 consecutive empty → stops
-            liquid_page,   # unreachable
-        ])
+        transport, requests = _counting_kalshi_transport(
+            [
+                dead_page,
+                liquid_page,  # resets counter
+                dead_page,
+                dead_page,
+                dead_page,  # 3 consecutive empty → stops
+                liquid_page,  # unreachable
+            ]
+        )
         async with httpx.AsyncClient(transport=transport) as http:
             client = KalshiClient(
                 http,

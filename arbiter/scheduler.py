@@ -17,11 +17,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from arbiter.alerts.base import AlertChannel
 from arbiter.db.models import AlertLog, Direction, MarketSnapshot, Opportunity, Source
 from arbiter.ingestion.base import Contract, MarketClient
-from arbiter.ingestion.matcher import ContractMatcher
 from arbiter.models.base import ProbabilityEstimator
 from arbiter.models.features import FEATURE_VERSION, SPEC, extract_features
-from arbiter.scoring.consistency import find_consistency_violations
-from arbiter.scoring.ev import ScoredOpportunity, compute_ev
+from arbiter.scoring.ev import ScoredOpportunity
+from arbiter.scoring.strategy import ConsistencyStrategy, EVStrategy, Strategy
+from arbiter.trading.paper import PaperTrader
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +47,8 @@ class ScanPipeline:
         session_factory: async_sessionmaker[AsyncSession],
         ev_threshold: float = 0.05,
         fee_rate: float = 0.01,
+        strategies: list[Strategy] | None = None,
+        paper_trader: PaperTrader | None = None,
     ) -> None:
         self._clients = clients
         self._estimator = estimator
@@ -54,7 +56,15 @@ class ScanPipeline:
         self._session_factory = session_factory
         self._ev_threshold = ev_threshold
         self._fee_rate = fee_rate
-        self._matcher = ContractMatcher()
+        self._paper_trader = paper_trader
+        self._strategies = (
+            strategies
+            if strategies is not None
+            else [
+                EVStrategy(fee_rate),
+                ConsistencyStrategy(fee_rate),
+            ]
+        )
         self._last_markets_scanned = 0
 
     async def _fetch_safe(self, client: MarketClient) -> list[Contract]:
@@ -85,16 +95,27 @@ class ScanPipeline:
             t_fetch - t_start,
         )
 
-        # 2. Cross-platform matching is deferred until cross-platform features
-        # are wired into extract_features.  Running O(|kalshi|×|polymarket|)
-        # comparisons and discarding the result wastes ~1-2s per cycle.
+        # 2. Run all strategies on the full contract batch
+        all_scored: list[ScoredOpportunity] = []
+        for strategy in self._strategies:
+            try:
+                scored = await strategy.score(all_contracts, self._estimator)
+                all_scored.extend(scored)
+            except Exception as exc:
+                logger.warning("Strategy %s failed: %s", strategy.name, exc)
 
-        # 3–7. Score every contract, dedup, alert, snapshot
+        # 3. Group by (contract_id, direction), take max EV per key
+        best_by_key: dict[tuple[str, str], ScoredOpportunity] = {}
+        for opp in all_scored:
+            key = (opp.contract.contract_id, opp.direction)
+            if key not in best_by_key or opp.expected_value > best_by_key[key].expected_value:
+                best_by_key[key] = opp
+
+        # 4–6. Threshold filter, dedup, alert, deactivate, snapshot
         alerts_sent = 0
         async with self._session_factory() as session:
             # Pre-fetch active opportunity keys in one query so _deactivate can
             # be skipped for the vast majority of contracts with no prior opportunity.
-            # Without this, every contract causes 2 remote SELECT queries (~7k/cycle).
             active_result = await session.execute(
                 select(Opportunity.contract_id, Opportunity.direction).where(
                     Opportunity.active.is_(True)
@@ -104,39 +125,34 @@ class ScanPipeline:
                 (row.contract_id, row.direction) for row in active_result
             }
 
-            for contract in all_contracts:
-                # 3. Estimate probability
-                model_prob = await self._estimator.estimate(contract)
-
-                # 4. Compute EV for both directions
-                all_scored = compute_ev(contract, model_prob, self._fee_rate)
-                above = [s for s in all_scored if s.expected_value >= self._ev_threshold]
-                above_dirs = {s.direction for s in above}
-                # Use the full set of possible directions so that directions
-                # dropped by compute_ev (price+fee >= 1) are also deactivated.
-                below_dirs = {"yes", "no"} - above_dirs
-
-                # 5–6. Dedup + alert for above-threshold opportunities
-                for opp in above:
-                    alerted = await self._upsert_and_alert(session, opp)
-                    alerts_sent += alerted
-                    active_opps.add((contract.contract_id, opp.direction))
-
-                # Deactivate only opportunities known to be active — skip SELECT
-                # entirely for contracts that never had a recorded opportunity.
-                for direction in below_dirs:
-                    if (contract.contract_id, direction) in active_opps:
-                        await self._deactivate(session, contract.contract_id, direction)
-                        active_opps.discard((contract.contract_id, direction))
-
-                # 7. Snapshot for continuous training data
-                await self._snapshot(session, contract)
-
-            # 8. Range-market consistency check (Kalshi intra-group arb)
-            for opp in find_consistency_violations(all_contracts, self._fee_rate):
+            # Collect which (contract_id, direction) keys are above threshold
+            above_keys: set[tuple[str, str]] = set()
+            for key, opp in best_by_key.items():
                 if opp.expected_value >= self._ev_threshold:
                     alerted = await self._upsert_and_alert(session, opp)
                     alerts_sent += alerted
+                    active_opps.add(key)
+                    above_keys.add(key)
+
+                    if self._paper_trader is not None:
+                        try:
+                            await self._paper_trader.execute(opp, session=session)
+                        except Exception as exc:
+                            logger.warning("Paper trade failed: %s", exc)
+
+            # Deactivate per-contract: for each fetched contract, any direction
+            # not above threshold should be deactivated if previously active.
+            seen_contracts = {c.contract_id for c in all_contracts}
+            for contract_id in seen_contracts:
+                for direction in ("yes", "no"):
+                    key = (contract_id, direction)
+                    if key not in above_keys and key in active_opps:
+                        await self._deactivate(session, contract_id, direction)
+                        active_opps.discard(key)
+
+            # Snapshot for continuous training data
+            for contract in all_contracts:
+                await self._snapshot(session, contract)
 
             await session.commit()
 
@@ -169,6 +185,7 @@ class ScanPipeline:
                 contract_id=opp.contract.contract_id,
                 title=opp.contract.title,
                 direction=Direction(opp.direction),
+                strategy_name=opp.strategy_name,
                 market_price=opp.market_price,
                 model_probability=opp.model_probability,
                 expected_value=opp.expected_value,
@@ -181,6 +198,7 @@ class ScanPipeline:
             should_alert = True
         else:
             was_inactive = not existing.active
+            existing.strategy_name = opp.strategy_name
             existing.market_price = opp.market_price
             existing.model_probability = opp.model_probability
             existing.expected_value = opp.expected_value

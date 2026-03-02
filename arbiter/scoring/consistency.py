@@ -72,9 +72,7 @@ def find_consistency_violations(
         sorted_entries = sorted(entries, key=lambda x: x[0])
         # Only use prices from contracts with real trading activity as anchors.
         # volume_24h == 0 indicates a default midpoint (0.50) with no real market signal.
-        traded = [
-            (c.yes_price if c.volume_24h > 0 else 0.0, c) for _, c in sorted_entries
-        ]
+        traded = [(c.yes_price if c.volume_24h > 0 else 0.0, c) for _, c in sorted_entries]
 
         for i, (_, contract) in enumerate(sorted_entries):
             # P(above X) ≥ P(above Y) for Y > X; P(below X) ≥ P(below Y) for Y < X

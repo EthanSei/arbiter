@@ -185,6 +185,7 @@ class TestDiscordChannel:
             expected_value=0.18,
             kelly_size=0.265,
             anchor_contract=anchor,
+            strategy_name="ConsistencyStrategy",
         )
 
         with patch.object(channel._client, "post", new_callable=AsyncMock) as mock_post:
@@ -248,6 +249,7 @@ class TestDiscordChannel:
             model_probability=0.50,
             expected_value=0.18,
             kelly_size=0.265,
+            strategy_name="ConsistencyStrategy",
         )
 
         with patch.object(channel._client, "post", new_callable=AsyncMock) as mock_post:

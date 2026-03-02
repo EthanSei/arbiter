@@ -9,7 +9,6 @@ import collections
 
 import httpx
 
-
 BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
 VOLUME_FIELD = "volume_24h_fp"
 
@@ -47,9 +46,7 @@ async def main(max_pages: int, limit: int, min_vol: float) -> None:
             prefix_counts: dict[str, int] = collections.Counter(
                 m.get("ticker", "")[:20] for m in markets
             )
-            top_prefixes = ", ".join(
-                f"{p!r}×{c}" for p, c in prefix_counts.most_common(3)
-            )
+            top_prefixes = ", ".join(f"{p!r}×{c}" for p, c in prefix_counts.most_common(3))
             print(
                 f"Page {page_num:2d}: {len(markets):4d} markets | "
                 f"vol≥{min_vol}: {len(qualifying):4d} | "

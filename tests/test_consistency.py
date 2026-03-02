@@ -190,6 +190,7 @@ class TestFindConsistencyViolations:
 
     def test_minden_team_code_is_not_treated_as_below_group(self):
         """MINDEN (Minnesota/Denver) contains 'MIN' but is NOT a price-range series."""
+
         # These are NBA player-prop markets, not min/max price brackets.
         # If mis-classified as a "below" group the descending YES prices would
         # incorrectly generate false violations.

@@ -8,16 +8,79 @@ Each scan cycle fetches live markets from both platforms, estimates true probabi
 
 ```
 Ingest (Kalshi + Polymarket)
-  → Cross-platform contract matching
-  → Feature extraction
-  → LightGBM probability estimate
-  → EV scoring (net of fees)
+  → Run pluggable strategies (EV scoring, consistency arbs, category routing)
   → State-based deduplication
-  → Discord alert
+  → Discord/SMS alert + optional paper trade
   → Postgres snapshot
 ```
 
 Runs as a persistent async Python process on **GCP Cloud Run** backed by **Supabase Postgres**.
+
+### Package Layout
+
+```
+arbiter/
+├── ingestion/          # Async API clients
+│   ├── base.py         #   Contract dataclass, MarketClient ABC
+│   ├── kalshi.py       #   Kalshi REST client (paginated, mve_filter)
+│   ├── polymarket.py   #   Polymarket Gamma client
+│   ├── matcher.py      #   Cross-platform contract matcher
+│   └── rate_limiter.py #   Token-bucket rate limiter wrapping httpx
+├── models/             # Probability estimation
+│   ├── base.py         #   ProbabilityEstimator ABC
+│   ├── lgbm.py         #   LightGBM estimator with isotonic calibration
+│   └── features.py     #   Feature extraction (versioned)
+├── scoring/            # Strategy framework + EV math
+│   ├── strategy.py     #   Strategy ABC, EVStrategy, ConsistencyStrategy, CategoryRouter
+│   ├── ev.py           #   compute_ev(), ScoredOpportunity dataclass
+│   ├── kelly.py        #   Kelly criterion position sizing
+│   └── consistency.py  #   Kalshi range-market monotonicity violation detector
+├── trading/            # Trade execution
+│   └── paper.py        #   PaperTrader (simulated trades, Kelly sizing, P&L tracking)
+├── backtesting/        # Historical strategy evaluation
+│   ├── engine.py       #   BacktestEngine (replays MarketSnapshots through strategies)
+│   └── metrics.py      #   Sharpe ratio, max drawdown, win rate
+├── export/             # Data export for Jupyter notebooks
+│   └── dataframes.py   #   export_snapshots(), export_opportunities(), to_csv()
+├── alerts/             # Alert channels
+│   ├── base.py         #   AlertChannel ABC
+│   └── discord.py      #   Discord webhook channel
+├── db/                 # Database layer
+│   ├── models.py       #   Opportunity, AlertLog, MarketSnapshot, PaperTrade
+│   └── session.py      #   Async session factory
+├── training/           # Offline model training
+│   ├── train.py        #   LightGBM training pipeline
+│   ├── dataset.py      #   Temporal train/val/test splits
+│   ├── collector.py    #   Historical data collection
+│   └── evaluate.py     #   Brier score, ECE evaluation
+├── scheduler.py        # ScanPipeline: scan loop orchestration
+├── config.py           # pydantic-settings configuration
+├── health.py           # Health endpoint for Cloud Run
+└── main.py             # Entrypoint
+```
+
+### Strategy System
+
+Scoring is pluggable via the `Strategy` ABC. Each strategy receives a batch of contracts and returns scored opportunities. The pipeline handles threshold filtering, dedup, alerting, and persistence.
+
+Built-in strategies:
+- **EVStrategy** — per-contract expected value using model probability estimates
+- **ConsistencyStrategy** — detects stochastic dominance violations in Kalshi range markets
+- **CategoryRouter** — composite pattern that routes contracts to category-specific strategy pipelines
+
+Custom strategies implement `Strategy.score()` and are passed to `ScanPipeline(strategies=[...])`.
+
+### Paper Trading
+
+`PaperTrader` records simulated trades using fractional Kelly sizing. Wired into `ScanPipeline` as an optional param — when present, above-threshold opportunities are automatically paper-traded.
+
+### Backtesting
+
+`BacktestEngine` replays resolved `MarketSnapshot` data through strategies, simulates fills at snapshot prices, and computes performance metrics (Sharpe, drawdown, win rate).
+
+### Data Export
+
+`export_snapshots()` and `export_opportunities()` return `list[dict]` for Jupyter analysis — no pandas dependency. Use `pd.DataFrame(result)` in notebooks.
 
 ---
 

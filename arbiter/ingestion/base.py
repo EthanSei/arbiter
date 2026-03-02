@@ -1,8 +1,13 @@
 """Base types for market data ingestion."""
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any, Protocol
+
+import httpx
 
 
 @dataclass(frozen=True)
@@ -29,6 +34,13 @@ class Contract:
     expires_at: datetime | None
     url: str
     status: str  # "open", "closed", etc.
+
+
+class HttpClient(Protocol):
+    """Structural typing for httpx.AsyncClient and RateLimitedClient."""
+
+    async def get(self, url: str, **kwargs: Any) -> httpx.Response: ...
+    async def post(self, url: str, **kwargs: Any) -> httpx.Response: ...
 
 
 class MarketClient(ABC):
