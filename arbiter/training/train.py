@@ -154,6 +154,17 @@ def _load_data(
 
 
 if __name__ == "__main__":
-    import sys
+    import argparse
 
-    train_model(dry_run="--dry-run" in sys.argv)
+    parser = argparse.ArgumentParser(description="Train LightGBM probability model")
+    parser.add_argument("--data-path", type=str, default=None, help="CSV training data path")
+    parser.add_argument(
+        "--output", type=str, default="models/arbiter_lgbm.pkl", help="Model output"
+    )
+    parser.add_argument("--dry-run", action="store_true", help="Train on small slice, skip saving")
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    metrics = train_model(data_path=args.data_path, output_path=args.output, dry_run=args.dry_run)
+    for k, v in metrics.items():
+        print(f"  {k}: {v:.4f}")

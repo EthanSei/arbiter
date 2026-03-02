@@ -28,6 +28,12 @@ dev = [
     "mypy>=1.13",
     "aiosqlite>=0.20",
 ]
+notebooks = [
+    "matplotlib>=3.8",
+    "pandas>=2.0",
+    "jupyter>=1.0",
+    "ipykernel>=6.0",
+]
 sms = ["twilio>=9.0"]
 llm = ["anthropic>=0.40"]
 

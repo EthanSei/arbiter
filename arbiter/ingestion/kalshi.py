@@ -194,7 +194,7 @@ class KalshiClient(MarketClient):
         for i in range(0, len(tickers), chunk_size):
             chunk = tickers[i : i + chunk_size]
             params: dict[str, str | int] = {
-                "tickers": ",".join(chunk),
+                "market_tickers": ",".join(chunk),
                 "period_interval": period_interval,
             }
             if start_ts is not None:
@@ -206,7 +206,11 @@ class KalshiClient(MarketClient):
             resp = await self._http.get(url, params=params)
             resp.raise_for_status()
             data: dict[str, Any] = resp.json()
-            result.update(data.get("candlesticks", {}))
+            for market_entry in data.get("markets", []):
+                ticker = market_entry.get("market_ticker", "")
+                candles = market_entry.get("candlesticks", [])
+                if ticker:
+                    result[ticker] = candles
         return result
 
     async def close(self) -> None:

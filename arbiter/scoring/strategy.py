@@ -64,6 +64,27 @@ class EVStrategy(Strategy):
         return results
 
 
+class YesOnlyEVStrategy(EVStrategy):
+    """EVStrategy that only trades the YES side.
+
+    Backtest analysis showed the model has genuine edge on YES-side trades
+    (48.2% win rate vs 41.1% breakeven) but is anti-calibrated on NO-side
+    trades (46.8% win rate vs 59.7% breakeven). This strategy filters to
+    YES-direction opportunities only.
+    """
+
+    async def score(
+        self,
+        contracts: list[Contract],
+        estimator: ProbabilityEstimator,
+    ) -> list[ScoredOpportunity]:
+        results = await super().score(contracts, estimator)
+        yes_only = [r for r in results if r.direction == "yes"]
+        for opp in yes_only:
+            opp.strategy_name = self.name
+        return yes_only
+
+
 class ConsistencyStrategy(Strategy):
     """Kalshi range-market internal consistency scoring.
 
@@ -91,19 +112,22 @@ def build_default_strategies(
 ) -> list[Strategy]:
     """Build the default strategy list.
 
+    Uses YesOnlyEVStrategy (YES-side only) as the EV strategy because
+    backtest analysis showed the model is anti-calibrated on NO-side trades.
+
     When target_categories is provided, returns a CategoryRouter that routes
-    those categories to [EVStrategy + ConsistencyStrategy] and everything
-    else to [EVStrategy] only.
+    those categories to [YesOnlyEVStrategy + ConsistencyStrategy] and
+    everything else to [YesOnlyEVStrategy] only.
 
     When target_categories is None, returns the flat default:
-    [EVStrategy, ConsistencyStrategy].
+    [YesOnlyEVStrategy, ConsistencyStrategy].
     """
     if not target_categories:
-        return [EVStrategy(fee_rate), ConsistencyStrategy(fee_rate)]
+        return [YesOnlyEVStrategy(fee_rate), ConsistencyStrategy(fee_rate)]
 
-    targeted = [EVStrategy(fee_rate), ConsistencyStrategy(fee_rate)]
+    targeted = [YesOnlyEVStrategy(fee_rate), ConsistencyStrategy(fee_rate)]
     routes = {cat.lower(): targeted for cat in target_categories}
-    router = CategoryRouter(routes=routes, default=[EVStrategy(fee_rate)])
+    router = CategoryRouter(routes=routes, default=[YesOnlyEVStrategy(fee_rate)])
     return [router]
 
 
