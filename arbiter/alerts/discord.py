@@ -1,7 +1,6 @@
 """Discord webhook alert channel."""
 
 import logging
-import re
 
 import httpx
 
@@ -13,12 +12,9 @@ logger = logging.getLogger(__name__)
 # Green = positive EV, matches Discord's "green" embed color
 _EMBED_COLOR = 0x2ECC71
 
-# Detect consistency-arb contracts by MAXMON/MINMON in the ticker.
-_CONSISTENCY_RE = re.compile(r"MAXMON|MINMON", re.IGNORECASE)
-
 
 def _is_consistency_arb(opp: ScoredOpportunity) -> bool:
-    return bool(_CONSISTENCY_RE.search(opp.contract.contract_id))
+    return opp.strategy_name == "ConsistencyStrategy"
 
 
 class DiscordChannel(AlertChannel):

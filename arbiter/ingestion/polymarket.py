@@ -109,19 +109,20 @@ def _safe_float(val: Any) -> float:
         return 0.0
 
 
-def _parse_json_list(val: Any) -> list:
+def _parse_json_list(val: Any) -> list[Any]:
     """Return val as a list, parsing JSON strings if needed."""
     if isinstance(val, list):
         return val
     if isinstance(val, str):
         try:
-            return json.loads(val)
+            parsed: list[Any] = json.loads(val)
+            return parsed
         except json.JSONDecodeError:
             return []
     return []
 
 
-def _extract_outcome_price(outcomes: list, prices: list, outcome: str) -> float | None:
+def _extract_outcome_price(outcomes: list[Any], prices: list[Any], outcome: str) -> float | None:
     for i, o in enumerate(outcomes):
         if str(o).lower() == outcome.lower():
             try:

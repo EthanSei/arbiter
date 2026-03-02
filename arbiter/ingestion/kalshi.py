@@ -5,9 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-import httpx
-
-from arbiter.ingestion.base import Contract, MarketClient
+from arbiter.ingestion.base import Contract, HttpClient, MarketClient
 
 
 class KalshiClient(MarketClient):
@@ -25,7 +23,7 @@ class KalshiClient(MarketClient):
 
     def __init__(
         self,
-        http: httpx.AsyncClient,
+        http: HttpClient,
         *,
         base_url: str = "https://api.elections.kalshi.com/trade-api/v2",
         max_markets: int = 10_000,
@@ -47,7 +45,11 @@ class KalshiClient(MarketClient):
             # NOTE: Kalshi accepts "open" as the query-param value to request open
             # markets, but the response body returns "status": "active" for those
             # records — both values are accepted in the _parse_market filter below.
-            params: dict[str, str | int] = {"limit": limit, "status": "open", "mve_filter": "exclude"}
+            params: dict[str, str | int] = {
+                "limit": limit,
+                "status": "open",
+                "mve_filter": "exclude",
+            }
             if cursor:
                 params["cursor"] = cursor
 
