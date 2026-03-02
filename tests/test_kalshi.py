@@ -668,24 +668,30 @@ CANDLESTICK_RESPONSE = {
 CANDLESTICK_EMPTY = {"candlesticks": []}
 
 CANDLESTICK_BATCH_RESPONSE = {
-    "candlesticks": {
-        "KXBTC-26MAR14-T100000": [
-            {
-                "end_period_ts": 1709300400,
-                "yes_price": {"open": 0.55, "high": 0.60, "low": 0.52, "close": 0.58},
-                "no_price": {"open": 0.45, "high": 0.48, "low": 0.40, "close": 0.42},
-                "volume": 1200,
-            },
-        ],
-        "KXFED-26MAR-T425": [
-            {
-                "end_period_ts": 1709300400,
-                "yes_price": {"open": 0.40, "high": 0.44, "low": 0.38, "close": 0.42},
-                "no_price": {"open": 0.60, "high": 0.62, "low": 0.56, "close": 0.58},
-                "volume": 500,
-            },
-        ],
-    },
+    "markets": [
+        {
+            "market_ticker": "KXBTC-26MAR14-T100000",
+            "candlesticks": [
+                {
+                    "end_period_ts": 1709300400,
+                    "yes_price": {"open": 0.55, "high": 0.60, "low": 0.52, "close": 0.58},
+                    "no_price": {"open": 0.45, "high": 0.48, "low": 0.40, "close": 0.42},
+                    "volume": 1200,
+                },
+            ],
+        },
+        {
+            "market_ticker": "KXFED-26MAR-T425",
+            "candlesticks": [
+                {
+                    "end_period_ts": 1709300400,
+                    "yes_price": {"open": 0.40, "high": 0.44, "low": 0.38, "close": 0.42},
+                    "no_price": {"open": 0.60, "high": 0.62, "low": 0.56, "close": 0.58},
+                    "volume": 500,
+                },
+            ],
+        },
+    ],
 }
 
 
@@ -832,7 +838,7 @@ class TestKalshiClientFetchCandlesticksBatch:
             await client.fetch_candlesticks_batch(["KXBTC-26MAR14-T100000", "KXFED-26MAR-T425"])
 
         params = requests[0].url.params
-        assert params["tickers"] == "KXBTC-26MAR14-T100000,KXFED-26MAR-T425"
+        assert params["market_tickers"] == "KXBTC-26MAR14-T100000,KXFED-26MAR-T425"
 
     async def test_sends_period_interval_param(self):
         """Should send period_interval as query param."""
@@ -871,8 +877,8 @@ class TestKalshiClientFetchCandlesticksBatch:
         assert "end_ts" not in params
 
     async def test_empty_response(self):
-        """Should return empty dict when no candlesticks."""
-        transport, _ = _candlestick_transport({"candlesticks": {}})
+        """Should return empty dict when no markets."""
+        transport, _ = _candlestick_transport({"markets": []})
         async with httpx.AsyncClient(transport=transport) as http:
             client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
             result = await client.fetch_candlesticks_batch(["KXBTC-26MAR14-T100000"])
@@ -890,9 +896,13 @@ class TestKalshiClientFetchCandlesticksBatch:
     async def test_chunks_large_ticker_lists(self):
         """Should split into multiple requests when >100 tickers."""
         tickers = [f"TICKER-{i}" for i in range(150)]
-        # Response for each chunk
-        chunk1_response = {"candlesticks": {t: [] for t in tickers[:100]}}
-        chunk2_response = {"candlesticks": {t: [] for t in tickers[100:]}}
+        # Response for each chunk — markets array format
+        chunk1_response = {
+            "markets": [{"market_ticker": t, "candlesticks": []} for t in tickers[:100]]
+        }
+        chunk2_response = {
+            "markets": [{"market_ticker": t, "candlesticks": []} for t in tickers[100:]]
+        }
         page_iter = iter([chunk1_response, chunk2_response])
         request_log: list[httpx.Request] = []
 

@@ -1,4 +1,4 @@
-.PHONY: install dev lint format test typecheck check clean run train integrate
+.PHONY: install dev lint format test typecheck check clean run train integrate collect-data backtest
 
 install:
 	pip install -e .
@@ -32,7 +32,13 @@ run:
 	python -m arbiter
 
 train:
-	python -m arbiter.training.train
+	python -m arbiter.training.train --data-path data/training.csv
+
+collect-data:
+	python scripts/collect_training_data.py
+
+backtest:
+	python scripts/backtest_ev.py
 
 integrate:
 	pytest -m integration -v tests/test_integration.py

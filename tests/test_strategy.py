@@ -11,7 +11,13 @@ from arbiter.ingestion.base import Contract, MarketClient
 from arbiter.models.base import ProbabilityEstimator
 from arbiter.scheduler import ScanPipeline
 from arbiter.scoring.ev import ScoredOpportunity
-from arbiter.scoring.strategy import CategoryRouter, ConsistencyStrategy, EVStrategy, Strategy
+from arbiter.scoring.strategy import (
+    CategoryRouter,
+    ConsistencyStrategy,
+    EVStrategy,
+    Strategy,
+    YesOnlyEVStrategy,
+)
 
 # ---------------------------------------------------------------------------
 # Test doubles
@@ -303,7 +309,7 @@ class TestBuildDefaultStrategies:
 
         strategies = build_default_strategies(fee_rate=0.01)
         assert len(strategies) == 2
-        assert isinstance(strategies[0], EVStrategy)
+        assert isinstance(strategies[0], YesOnlyEVStrategy)
         assert isinstance(strategies[1], ConsistencyStrategy)
 
     def test_with_target_series_returns_category_router(self) -> None:
@@ -326,9 +332,9 @@ class TestBuildDefaultStrategies:
         router = strategies[0]
         contracts = [_contract(yes_price=0.30, category="Economics")]
         results = await router.score(contracts, _FixedEstimator(0.70))
-        # EVStrategy produces yes+no directions
-        assert len(results) >= 2
-        assert any(r.strategy_name == "EVStrategy" for r in results)
+        # YesOnlyEVStrategy produces yes direction only
+        assert len(results) >= 1
+        assert any(r.strategy_name == "YesOnlyEVStrategy" for r in results)
 
     async def test_router_uses_ev_only_as_default(self) -> None:
         from arbiter.scoring.strategy import build_default_strategies
@@ -341,8 +347,68 @@ class TestBuildDefaultStrategies:
         contracts = [_contract(yes_price=0.30, category="Other")]
         results = await router.score(contracts, _FixedEstimator(0.70))
         strategy_names = {r.strategy_name for r in results}
-        assert "EVStrategy" in strategy_names
+        assert "YesOnlyEVStrategy" in strategy_names
         assert "ConsistencyStrategy" not in strategy_names
+
+
+# ---------------------------------------------------------------------------
+# YesOnlyEVStrategy
+# ---------------------------------------------------------------------------
+
+
+class TestYesOnlyEVStrategy:
+    async def test_returns_only_yes_direction(self) -> None:
+        from arbiter.scoring.strategy import YesOnlyEVStrategy
+
+        strategy = YesOnlyEVStrategy(fee_rate=0.0)
+        results = await strategy.score([_contract()], _FixedEstimator(0.70))
+        assert len(results) == 1
+        assert all(r.direction == "yes" for r in results)
+
+    async def test_strategy_name(self) -> None:
+        from arbiter.scoring.strategy import YesOnlyEVStrategy
+
+        strategy = YesOnlyEVStrategy(fee_rate=0.0)
+        results = await strategy.score([_contract()], _FixedEstimator(0.70))
+        assert all(r.strategy_name == "YesOnlyEVStrategy" for r in results)
+
+    async def test_uses_estimator_probability(self) -> None:
+        from arbiter.scoring.strategy import YesOnlyEVStrategy
+
+        strategy = YesOnlyEVStrategy(fee_rate=0.0)
+        results = await strategy.score([_contract()], _FixedEstimator(0.80))
+        assert results[0].model_probability == 0.80
+
+    async def test_fee_rate_applied(self) -> None:
+        from arbiter.scoring.strategy import YesOnlyEVStrategy
+
+        no_fee = YesOnlyEVStrategy(fee_rate=0.0)
+        with_fee = YesOnlyEVStrategy(fee_rate=0.05)
+        r_no_fee = await no_fee.score([_contract()], _FixedEstimator(0.70))
+        r_with_fee = await with_fee.score([_contract()], _FixedEstimator(0.70))
+        assert r_with_fee[0].expected_value < r_no_fee[0].expected_value
+
+    async def test_multiple_contracts(self) -> None:
+        from arbiter.scoring.strategy import YesOnlyEVStrategy
+
+        strategy = YesOnlyEVStrategy(fee_rate=0.0)
+        contracts = [_contract(contract_id=f"C-{i}") for i in range(3)]
+        results = await strategy.score(contracts, _FixedEstimator(0.70))
+        # 3 contracts × 1 direction (YES only) = 3
+        assert len(results) == 3
+        assert all(r.direction == "yes" for r in results)
+
+    async def test_empty_contracts(self) -> None:
+        from arbiter.scoring.strategy import YesOnlyEVStrategy
+
+        strategy = YesOnlyEVStrategy(fee_rate=0.0)
+        results = await strategy.score([], _FixedEstimator(0.70))
+        assert results == []
+
+
+# ---------------------------------------------------------------------------
+# CategoryRouter
+# ---------------------------------------------------------------------------
 
 
 class TestCategoryRouter:

@@ -66,6 +66,7 @@ class ScanPipeline:
             ]
         )
         self._last_markets_scanned = 0
+        self._alerted_keys: set[tuple[str, str]] = set()  # in-memory dedup
 
     async def _fetch_safe(self, client: MarketClient) -> list[Contract]:
         """Fetch from one client; return [] on any failure."""
@@ -208,10 +209,12 @@ class ScanPipeline:
             db_opp = existing
             should_alert = was_inactive  # Re-alert only on reactivation
 
-        if should_alert:
+        alert_key = (opp.contract.contract_id, opp.direction)
+        if should_alert and alert_key not in self._alerted_keys:
             # Flush so db_opp.id is stable before writing AlertLog rows
             await session.flush()
             await self._send_alerts(session, db_opp, opp, now)
+            self._alerted_keys.add(alert_key)
             return 1
         return 0
 
@@ -225,6 +228,7 @@ class ScanPipeline:
         existing = result.scalar_one_or_none()
         if existing is not None:
             existing.active = False
+            self._alerted_keys.discard((contract_id, direction))
 
     async def _send_alerts(
         self,
