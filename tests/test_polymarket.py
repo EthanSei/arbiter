@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 
-from arbiter.ingestion.polymarket import PolymarketClient, _MIN_TOTAL_VOLUME_PREFILTER
+from arbiter.ingestion.polymarket import _MIN_TOTAL_VOLUME_PREFILTER, PolymarketClient
 
 # --- Realistic Polymarket Gamma API response fixtures ---
 # Field names match the real Gamma API camelCase schema.
@@ -62,8 +62,10 @@ GAMMA_CLOSED_MARKET = [
 
 def _gamma_transport(response: list[dict]) -> httpx.MockTransport:
     """Transport returning a single Gamma API response."""
+
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=response)
+
     return httpx.MockTransport(handler)
 
 

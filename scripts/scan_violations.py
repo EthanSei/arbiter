@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import sys
 import time
 from datetime import UTC, datetime
 
@@ -36,8 +35,8 @@ async def fetch_and_scan(client: KalshiClient) -> dict:
     violations = find_consistency_violations(contracts, fee_rate=_FEE_RATE)
 
     # Count range-market groups for context
-    from collections import defaultdict
     import re
+    from collections import defaultdict
 
     suffix_re = re.compile(r"-(\d+)$")
     above_re = re.compile(r"MAXMON", re.IGNORECASE)
@@ -58,11 +57,13 @@ async def fetch_and_scan(client: KalshiClient) -> dict:
     group_details = []
     for base, members in sorted(groups.items()):
         traded = [c for c in members if c.volume_24h > 0]
-        group_details.append({
-            "base": base,
-            "size": len(members),
-            "traded": len(traded),
-        })
+        group_details.append(
+            {
+                "base": base,
+                "size": len(members),
+                "traded": len(traded),
+            }
+        )
 
     return {
         "timestamp": datetime.now(UTC).isoformat(),
@@ -142,10 +143,12 @@ async def run(args: argparse.Namespace) -> None:
             elapsed = time.monotonic() - start
             pct = (violation_snapshots / snapshot_num) * 100
 
-            print(f"  Running stats: {snapshot_num} snapshots, "
-                  f"{violation_snapshots} with violations ({pct:.0f}%), "
-                  f"{total_violations} total violations, "
-                  f"{elapsed / 60:.1f} min elapsed")
+            print(
+                f"  Running stats: {snapshot_num} snapshots, "
+                f"{violation_snapshots} with violations ({pct:.0f}%), "
+                f"{total_violations} total violations, "
+                f"{elapsed / 60:.1f} min elapsed"
+            )
 
             if args.duration and elapsed >= args.duration:
                 print(f"\n  Duration limit ({args.duration}s) reached. Stopping.")
@@ -155,7 +158,7 @@ async def run(args: argparse.Namespace) -> None:
 
         # Final summary
         print(f"\n{'=' * 70}")
-        print(f"  FINAL SUMMARY")
+        print("  FINAL SUMMARY")
         print(f"{'=' * 70}")
         print(f"  Snapshots:              {snapshot_num}")
         print(f"  With violations:        {violation_snapshots} ({pct:.0f}%)")
@@ -173,16 +176,19 @@ def main() -> None:
         description="Scan Kalshi range markets for consistency violations"
     )
     parser.add_argument(
-        "--watch", action="store_true",
-        help="Poll repeatedly instead of single snapshot"
+        "--watch", action="store_true", help="Poll repeatedly instead of single snapshot"
     )
     parser.add_argument(
-        "--interval", type=int, default=300,
-        help="Seconds between polls in watch mode (default: 300)"
+        "--interval",
+        type=int,
+        default=300,
+        help="Seconds between polls in watch mode (default: 300)",
     )
     parser.add_argument(
-        "--duration", type=int, default=0,
-        help="Max duration in seconds for watch mode (0=unlimited)"
+        "--duration",
+        type=int,
+        default=0,
+        help="Max duration in seconds for watch mode (0=unlimited)",
     )
     args = parser.parse_args()
     asyncio.run(run(args))

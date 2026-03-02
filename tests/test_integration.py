@@ -13,8 +13,8 @@ Discord and Supabase tests require DISCORD_WEBHOOK_URL and DATABASE_URL in .env.
 
 from __future__ import annotations
 
-import pytest
 import httpx
+import pytest
 from sqlalchemy import text
 
 from arbiter.config import settings
@@ -240,9 +240,7 @@ class TestDiscordWebhook:
         """A POST to the webhook must return 204 (Discord accepted the message)."""
         if not settings.discord_webhook_url:
             pytest.skip("DISCORD_WEBHOOK_URL not configured")
-        payload = {
-            "embeds": [{"title": "[ARBITER] integration test ping", "color": 0x2ECC71}]
-        }
+        payload = {"embeds": [{"title": "[ARBITER] integration test ping", "color": 0x2ECC71}]}
         async with httpx.AsyncClient(timeout=10.0) as client:
             r = await client.post(settings.discord_webhook_url, json=payload)
         assert r.status_code == 204, (

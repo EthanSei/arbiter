@@ -24,6 +24,7 @@ class ScoredOpportunity:
     expected_value: float  # EV per dollar, after execution costs
     kelly_size: float  # full Kelly fraction (caller applies fractional Kelly)
     anchor_contract: Contract | None = field(default=None)  # sibling for consistency arbs
+    strategy_name: str = field(default="")  # which strategy produced this opportunity
 
 
 def compute_ev(
