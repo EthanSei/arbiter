@@ -297,6 +297,54 @@ class _RecordingStrategy(Strategy):
         return []
 
 
+class TestBuildDefaultStrategies:
+    def test_without_target_series_returns_flat_strategies(self) -> None:
+        from arbiter.scoring.strategy import build_default_strategies
+
+        strategies = build_default_strategies(fee_rate=0.01)
+        assert len(strategies) == 2
+        assert isinstance(strategies[0], EVStrategy)
+        assert isinstance(strategies[1], ConsistencyStrategy)
+
+    def test_with_target_series_returns_category_router(self) -> None:
+        from arbiter.scoring.strategy import build_default_strategies
+
+        strategies = build_default_strategies(
+            fee_rate=0.01,
+            target_categories=["Economics", "Financials"],
+        )
+        assert len(strategies) == 1
+        assert isinstance(strategies[0], CategoryRouter)
+
+    async def test_router_routes_economics_to_both_strategies(self) -> None:
+        from arbiter.scoring.strategy import build_default_strategies
+
+        strategies = build_default_strategies(
+            fee_rate=0.0,
+            target_categories=["Economics"],
+        )
+        router = strategies[0]
+        contracts = [_contract(yes_price=0.30, category="Economics")]
+        results = await router.score(contracts, _FixedEstimator(0.70))
+        # EVStrategy produces yes+no directions
+        assert len(results) >= 2
+        assert any(r.strategy_name == "EVStrategy" for r in results)
+
+    async def test_router_uses_ev_only_as_default(self) -> None:
+        from arbiter.scoring.strategy import build_default_strategies
+
+        strategies = build_default_strategies(
+            fee_rate=0.0,
+            target_categories=["Economics"],
+        )
+        router = strategies[0]
+        contracts = [_contract(yes_price=0.30, category="Other")]
+        results = await router.score(contracts, _FixedEstimator(0.70))
+        strategy_names = {r.strategy_name for r in results}
+        assert "EVStrategy" in strategy_names
+        assert "ConsistencyStrategy" not in strategy_names
+
+
 class TestCategoryRouter:
     async def test_routes_by_category(self) -> None:
         crypto_strategy = _RecordingStrategy()

@@ -85,6 +85,28 @@ class ConsistencyStrategy(Strategy):
         return results
 
 
+def build_default_strategies(
+    fee_rate: float = 0.01,
+    target_categories: list[str] | None = None,
+) -> list[Strategy]:
+    """Build the default strategy list.
+
+    When target_categories is provided, returns a CategoryRouter that routes
+    those categories to [EVStrategy + ConsistencyStrategy] and everything
+    else to [EVStrategy] only.
+
+    When target_categories is None, returns the flat default:
+    [EVStrategy, ConsistencyStrategy].
+    """
+    if not target_categories:
+        return [EVStrategy(fee_rate), ConsistencyStrategy(fee_rate)]
+
+    targeted = [EVStrategy(fee_rate), ConsistencyStrategy(fee_rate)]
+    routes = {cat.lower(): targeted for cat in target_categories}
+    router = CategoryRouter(routes=routes, default=[EVStrategy(fee_rate)])
+    return [router]
+
+
 class CategoryRouter(Strategy):
     """Routes contracts to category-specific strategy pipelines.
 

@@ -29,14 +29,30 @@ class KalshiClient(MarketClient):
         max_markets: int = 10_000,
         min_volume_24h: float = 5.0,
         max_empty_pages: int = 5,
+        series_tickers: list[str] | None = None,
     ) -> None:
         self._http = http
         self._base_url = base_url.rstrip("/")
         self._max_markets = max_markets
         self._min_volume_24h = min_volume_24h
         self._max_empty_pages = max_empty_pages
+        self._series_tickers = series_tickers
 
     async def fetch_markets(self, *, limit: int = 1000) -> list[Contract]:
+        if self._series_tickers:
+            all_contracts: list[Contract] = []
+            for st in self._series_tickers:
+                contracts = await self._fetch_open_markets(limit=limit, series_ticker=st)
+                all_contracts.extend(contracts)
+            return all_contracts
+        return await self._fetch_open_markets(limit=limit)
+
+    async def _fetch_open_markets(
+        self,
+        *,
+        limit: int = 1000,
+        series_ticker: str | None = None,
+    ) -> list[Contract]:
         contracts: list[Contract] = []
         total_fetched = 0
         consecutive_empty = 0
@@ -50,6 +66,8 @@ class KalshiClient(MarketClient):
                 "status": "open",
                 "mve_filter": "exclude",
             }
+            if series_ticker:
+                params["series_ticker"] = series_ticker
             if cursor:
                 params["cursor"] = cursor
 
@@ -83,6 +101,55 @@ class KalshiClient(MarketClient):
             ):
                 break
         return contracts
+
+    async def fetch_settled(
+        self,
+        *,
+        series_ticker: str,
+        limit: int = 1000,
+        min_close_ts: int | None = None,
+        max_close_ts: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Fetch historically settled markets for a series, returning raw dicts.
+
+        Returns raw API dicts (not Contract objects) because settled markets have
+        fields like ``result``, ``floor_strike``, and ``volume`` that don't fit
+        the Contract dataclass.
+        """
+        results: list[dict[str, Any]] = []
+        total_fetched = 0
+        cursor = ""
+        while True:
+            params: dict[str, str | int] = {
+                "limit": limit,
+                "status": "settled",
+                "series_ticker": series_ticker,
+                "mve_filter": "exclude",
+            }
+            if min_close_ts is not None:
+                params["min_close_ts"] = min_close_ts
+            if max_close_ts is not None:
+                params["max_close_ts"] = max_close_ts
+            if cursor:
+                params["cursor"] = cursor
+
+            resp = await self._http.get(f"{self._base_url}/markets", params=params)
+            resp.raise_for_status()
+            data: dict[str, Any] = resp.json()
+
+            page = data.get("markets", [])
+            if not page:
+                break
+
+            total_fetched += len(page)
+            for m in page:
+                if m.get("volume", 0) > 0:
+                    results.append(m)
+
+            cursor = data.get("cursor", "")
+            if not cursor or total_fetched >= self._max_markets:
+                break
+        return results
 
     async def close(self) -> None:
         pass  # Client is borrowed, not owned

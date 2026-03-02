@@ -33,3 +33,11 @@ class TestConfigValidation:
         assert s.ev_threshold == 0.05
         assert 0 < s.kelly_fraction < 1
         assert s.fee_rate >= 0
+
+    def test_kalshi_target_series_default_empty(self):
+        s = Settings()
+        assert s.kalshi_target_series == ""
+
+    def test_kalshi_target_series_accepts_comma_separated(self):
+        s = Settings(kalshi_target_series="KXCPI,KXPAYROLLS,KXCPIYOY")
+        assert s.kalshi_target_series == "KXCPI,KXPAYROLLS,KXCPIYOY"
