@@ -267,11 +267,11 @@ async def run(args: argparse.Namespace) -> None:
             overpriced = [e for e in all_episodes if e.direction == "overpriced"]
             underpriced = [e for e in all_episodes if e.direction == "underpriced"]
 
-            print(f"\n  Direction split:")
+            print("\n  Direction split:")
             print(f"    Overpriced:  {len(overpriced)} ({len(overpriced)/len(all_episodes):.0%})")
             print(f"    Underpriced: {len(underpriced)} ({len(underpriced)/len(all_episodes):.0%})")
 
-            print(f"\n  Duration distribution (minutes):")
+            print("\n  Duration distribution (minutes):")
             print(f"    Min:    {min(durations):>8.0f}")
             print(f"    P10:    {_percentile(durations, 10):>8.0f}")
             print(f"    P25:    {_percentile(durations, 25):>8.0f}")
@@ -281,7 +281,7 @@ async def run(args: argparse.Namespace) -> None:
             print(f"    P90:    {_percentile(durations, 90):>8.0f}")
             print(f"    Max:    {max(durations):>8.0f}")
 
-            print(f"\n  Duration buckets:")
+            print("\n  Duration buckets:")
             buckets = [
                 ("< 1 hour", 0, 60),
                 ("1-4 hours", 60, 240),
@@ -297,7 +297,7 @@ async def run(args: argparse.Namespace) -> None:
                 bar = "#" * int(pct * 40)
                 print(f"    {label:<14} {count:>5} ({pct:>5.1%}) {bar}")
 
-            print(f"\n  Peak deviation distribution:")
+            print("\n  Peak deviation distribution:")
             print(f"    Min:    {min(peaks):>8.3f}")
             print(f"    Median: {statistics.median(peaks):>8.3f}")
             print(f"    Mean:   {statistics.mean(peaks):>8.3f}")
@@ -306,7 +306,7 @@ async def run(args: argparse.Namespace) -> None:
             print(f"    Max:    {max(peaks):>8.3f}")
 
             # Actionability analysis
-            print(f"\n  ACTIONABILITY ANALYSIS (Discord alert viability):")
+            print("\n  ACTIONABILITY ANALYSIS (Discord alert viability):")
             actionable_30 = [e for e in all_episodes if e.duration_minutes >= 30]
             actionable_60 = [e for e in all_episodes if e.duration_minutes >= 60]
             large = [e for e in all_episodes if e.peak_deviation >= 0.10]
@@ -326,7 +326,7 @@ async def run(args: argparse.Namespace) -> None:
             if actionable_large:
                 al_durations = [e.duration_minutes for e in actionable_large]
                 al_peaks = [e.peak_deviation for e in actionable_large]
-                print(f"\n    Actionable episode stats:")
+                print("\n    Actionable episode stats:")
                 print(f"      Duration median: {statistics.median(al_durations):.0f} min, "
                       f"mean: {statistics.mean(al_durations):.0f} min")
                 print(f"      Peak dev median: {statistics.median(al_peaks):.3f}, "
@@ -341,14 +341,14 @@ async def run(args: argparse.Namespace) -> None:
 
             # Estimate monthly frequency
             months = args.months or 1
-            print(f"\n    Estimated monthly frequency (across all markets):")
+            print("\n    Estimated monthly frequency (across all markets):")
             print(f"      Total episodes/month:      {len(all_episodes) / months:.0f}")
             if actionable_large:
                 print(f"      Actionable/month:          {len(actionable_large) / months:.0f}")
 
         # Per-series breakdown table
         print(f"\n  {'=' * 70}")
-        print(f"  PER-SERIES BREAKDOWN")
+        print("  PER-SERIES BREAKDOWN")
         print(f"  {'=' * 70}")
         print(f"  {'Series':<18} {'Markets':>8} {'MidRng':>7} {'Checked':>8} "
               f"{'w/Data':>7} {'Episodes':>9}")
