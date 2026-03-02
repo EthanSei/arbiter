@@ -70,6 +70,99 @@ KALSHI_MARKET_PAGE2 = {
     "cursor": "",
 }
 
+KALSHI_SETTLED_MARKET_RESPONSE = {
+    "markets": [
+        {
+            "ticker": "KXBTC-26JAN15-T95000",
+            "event_ticker": "KXBTC-26JAN15",
+            "title": "Bitcoin above $95,000 on January 15?",
+            "category": "Crypto",
+            "last_price": 85,
+            "result": "no",
+            "volume": 12400,
+            "volume_24h": 0,
+            "floor_strike": 95000.0,
+            "cap_strike": None,
+            "close_time": "2026-01-15T23:59:59Z",
+            "status": "finalized",
+            "settlement_value": 0,
+        },
+        {
+            "ticker": "KXBTC-26JAN15-T90000",
+            "event_ticker": "KXBTC-26JAN15",
+            "title": "Bitcoin above $90,000 on January 15?",
+            "category": "Crypto",
+            "last_price": 72,
+            "result": "yes",
+            "volume": 8900,
+            "volume_24h": 0,
+            "floor_strike": 90000.0,
+            "cap_strike": None,
+            "close_time": "2026-01-15T23:59:59Z",
+            "status": "finalized",
+            "settlement_value": 100,
+        },
+    ],
+    "cursor": "settled_cursor_1",
+}
+
+KALSHI_SETTLED_PAGE2 = {
+    "markets": [
+        {
+            "ticker": "KXBTC-26JAN15-T85000",
+            "event_ticker": "KXBTC-26JAN15",
+            "title": "Bitcoin above $85,000 on January 15?",
+            "category": "Crypto",
+            "last_price": 90,
+            "result": "yes",
+            "volume": 5200,
+            "volume_24h": 0,
+            "floor_strike": 85000.0,
+            "cap_strike": None,
+            "close_time": "2026-01-15T23:59:59Z",
+            "status": "finalized",
+            "settlement_value": 100,
+        },
+    ],
+    "cursor": "",
+}
+
+KALSHI_SETTLED_ZERO_VOLUME = {
+    "markets": [
+        {
+            "ticker": "KXBTC-26JAN15-T120000",
+            "event_ticker": "KXBTC-26JAN15",
+            "title": "Bitcoin above $120,000 on January 15?",
+            "category": "Crypto",
+            "last_price": 5,
+            "result": "no",
+            "volume": 0,
+            "volume_24h": 0,
+            "floor_strike": 120000.0,
+            "cap_strike": None,
+            "close_time": "2026-01-15T23:59:59Z",
+            "status": "finalized",
+            "settlement_value": 0,
+        },
+        {
+            "ticker": "KXBTC-26JAN15-T100000",
+            "event_ticker": "KXBTC-26JAN15",
+            "title": "Bitcoin above $100,000 on January 15?",
+            "category": "Crypto",
+            "last_price": 60,
+            "result": "no",
+            "volume": 7300,
+            "volume_24h": 0,
+            "floor_strike": 100000.0,
+            "cap_strike": None,
+            "close_time": "2026-01-15T23:59:59Z",
+            "status": "finalized",
+            "settlement_value": 0,
+        },
+    ],
+    "cursor": "",
+}
+
 KALSHI_CLOSED_MARKET = {
     "markets": [
         {
@@ -389,6 +482,159 @@ class TestKalshiClientFetchMarkets:
 
         assert contracts == []
         assert len(requests) == 1  # breaks immediately, no infinite loop
+
+
+class TestKalshiClientFetchSettled:
+    async def test_fetch_settled_returns_raw_dicts(self):
+        transport = _kalshi_transport([KALSHI_SETTLED_MARKET_RESPONSE])
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            markets = await client.fetch_settled(series_ticker="KXBTC")
+
+        assert isinstance(markets, list)
+        assert len(markets) == 2
+        assert all(isinstance(m, dict) for m in markets)
+        assert markets[0]["ticker"] == "KXBTC-26JAN15-T95000"
+        assert markets[0]["result"] == "no"
+        assert markets[1]["settlement_value"] == 100
+
+    async def test_fetch_settled_sends_correct_params(self):
+        transport, requests = _counting_kalshi_transport([KALSHI_SETTLED_MARKET_RESPONSE])
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            await client.fetch_settled(series_ticker="KXBTC", limit=500)
+
+        params = requests[0].url.params
+        assert params["status"] == "settled"
+        assert params["series_ticker"] == "KXBTC"
+        assert params["mve_filter"] == "exclude"
+        assert params["limit"] == "500"
+
+    async def test_fetch_settled_paginates(self):
+        transport = _kalshi_transport([KALSHI_SETTLED_MARKET_RESPONSE, KALSHI_SETTLED_PAGE2])
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            markets = await client.fetch_settled(series_ticker="KXBTC")
+
+        # 2 from page 1 + 1 from page 2
+        assert len(markets) == 3
+
+    async def test_fetch_settled_filters_zero_volume(self):
+        transport = _kalshi_transport([KALSHI_SETTLED_ZERO_VOLUME])
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            markets = await client.fetch_settled(series_ticker="KXBTC")
+
+        # Only the market with volume=7300 should remain
+        assert len(markets) == 1
+        assert markets[0]["ticker"] == "KXBTC-26JAN15-T100000"
+
+    async def test_fetch_settled_passes_time_filters(self):
+        transport, requests = _counting_kalshi_transport([KALSHI_SETTLED_MARKET_RESPONSE])
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            await client.fetch_settled(
+                series_ticker="KXBTC",
+                min_close_ts=1704067200,
+                max_close_ts=1706745600,
+            )
+
+        params = requests[0].url.params
+        assert params["min_close_ts"] == "1704067200"
+        assert params["max_close_ts"] == "1706745600"
+
+    async def test_fetch_settled_stops_at_max_markets(self):
+        transport, requests = _counting_kalshi_transport(
+            [KALSHI_SETTLED_MARKET_RESPONSE, KALSHI_SETTLED_PAGE2]
+        )
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(
+                http,
+                base_url="https://api.kalshi.com/trade-api/v2",
+                max_markets=2,
+            )
+            markets = await client.fetch_settled(series_ticker="KXBTC")
+
+        # Should stop after page 1 (2 markets fetched >= max_markets=2)
+        assert len(requests) == 1
+        assert len(markets) == 2
+
+
+class TestKalshiClientSeriesTickers:
+    async def test_sends_series_ticker_param_per_series(self):
+        """With series_tickers set, makes one request per series with series_ticker param."""
+        cpi_resp = {"markets": [KALSHI_MARKET_RESPONSE["markets"][0]], "cursor": ""}
+        payrolls_resp = {"markets": [KALSHI_MARKET_RESPONSE["markets"][1]], "cursor": ""}
+        transport, requests = _counting_kalshi_transport([cpi_resp, payrolls_resp])
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(
+                http,
+                base_url="https://api.kalshi.com/trade-api/v2",
+                series_tickers=["KXCPI", "KXPAYROLLS"],
+            )
+            await client.fetch_markets()
+
+        assert len(requests) == 2
+        assert requests[0].url.params["series_ticker"] == "KXCPI"
+        assert requests[1].url.params["series_ticker"] == "KXPAYROLLS"
+
+    async def test_combines_results_from_multiple_series(self):
+        """Results from all targeted series are combined into one list."""
+        cpi_market = {
+            **KALSHI_MARKET_RESPONSE["markets"][0],
+            "ticker": "KXCPI-26MAR-T3.0",
+            "category": "Economics",
+        }
+        payrolls_market = {
+            **KALSHI_MARKET_RESPONSE["markets"][0],
+            "ticker": "KXPAYROLLS-26MAR-T200K",
+            "category": "Economics",
+        }
+        cpi_resp = {"markets": [cpi_market], "cursor": ""}
+        payrolls_resp = {"markets": [payrolls_market], "cursor": ""}
+        transport = _kalshi_transport([cpi_resp, payrolls_resp])
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(
+                http,
+                base_url="https://api.kalshi.com/trade-api/v2",
+                series_tickers=["KXCPI", "KXPAYROLLS"],
+            )
+            contracts = await client.fetch_markets()
+
+        assert len(contracts) == 2
+        tickers = {c.contract_id for c in contracts}
+        assert tickers == {"KXCPI-26MAR-T3.0", "KXPAYROLLS-26MAR-T200K"}
+
+    async def test_no_series_tickers_omits_param(self):
+        """Without series_tickers, no series_ticker param is sent (current behavior)."""
+        transport, requests = _counting_kalshi_transport([KALSHI_MARKET_RESPONSE])
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            await client.fetch_markets()
+
+        assert "series_ticker" not in requests[0].url.params
+
+    async def test_paginates_within_each_series(self):
+        """Each series is paginated independently."""
+        transport, requests = _counting_kalshi_transport(
+            [
+                KALSHI_MARKET_RESPONSE,  # series 1, page 1 (cursor=abc123)
+                KALSHI_MARKET_PAGE2,  # series 1, page 2 (cursor="")
+            ]
+        )
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(
+                http,
+                base_url="https://api.kalshi.com/trade-api/v2",
+                series_tickers=["KXCPI"],
+            )
+            contracts = await client.fetch_markets()
+
+        assert len(requests) == 2
+        # Both requests target the same series
+        assert requests[0].url.params["series_ticker"] == "KXCPI"
+        assert requests[1].url.params["series_ticker"] == "KXCPI"
+        assert len(contracts) == 3  # 2 from page 1 + 1 from page 2
 
 
 class TestKalshiClientClose:

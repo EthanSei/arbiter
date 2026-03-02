@@ -20,6 +20,7 @@ from arbiter.ingestion.polymarket import PolymarketClient
 from arbiter.ingestion.rate_limiter import RateLimitedClient
 from arbiter.models.lgbm import LGBMEstimator
 from arbiter.scheduler import ScanPipeline
+from arbiter.scoring.strategy import build_default_strategies
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,12 +41,18 @@ async def main() -> None:
 
     # Kalshi's public API rate-limits rapid pagination; 20 RPM keeps requests ~3 s apart.
     kalshi_rl = RateLimitedClient(kalshi_http, rpm=20)
+    series_tickers = (
+        [s.strip() for s in settings.kalshi_target_series.split(",") if s.strip()]
+        if settings.kalshi_target_series
+        else None
+    )
     kalshi = KalshiClient(
         kalshi_rl,
         base_url=settings.kalshi_api_base,
         max_markets=settings.max_markets_per_poll,
         min_volume_24h=settings.min_volume_24h,
         max_empty_pages=settings.kalshi_max_empty_pages,
+        series_tickers=series_tickers,
     )
     polymarket = PolymarketClient(
         poly_http,
@@ -62,6 +69,14 @@ async def main() -> None:
 
     channels: list[AlertChannel] = [DiscordChannel(settings.discord_webhook_url)]
 
+    # When targeting specific series, use a CategoryRouter that routes
+    # Economics/Financials to [EV + Consistency] and others to [EV only].
+    target_categories = ["Economics", "Financials"] if series_tickers else None
+    strategies = build_default_strategies(
+        fee_rate=settings.fee_rate,
+        target_categories=target_categories,
+    )
+
     pipeline = ScanPipeline(
         clients=[kalshi, polymarket],
         estimator=estimator,
@@ -69,6 +84,7 @@ async def main() -> None:
         session_factory=async_session_factory,
         ev_threshold=settings.ev_threshold,
         fee_rate=settings.fee_rate,
+        strategies=strategies,
     )
 
     health_task = asyncio.create_task(start_health_server(settings.health_port))

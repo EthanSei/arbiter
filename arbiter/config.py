@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     # Anthropic (future — not used in V1)
     anthropic_api_key: str = ""
 
+    # Targeted series (comma-separated, e.g. "KXCPI,KXPAYROLLS,KXCPIYOY")
+    kalshi_target_series: str = ""
+
     # Scanning parameters
     poll_interval_seconds: int = Field(default=300, gt=0)
     ev_threshold: float = Field(default=0.05, gt=0)
