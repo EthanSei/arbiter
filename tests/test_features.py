@@ -6,7 +6,38 @@ import numpy as np
 import pytest
 
 from arbiter.ingestion.base import Contract
-from arbiter.models.features import SPEC, extract_features
+from arbiter.models.features import FEATURE_VERSION, SPEC, extract_features
+
+
+class TestSpecSchema:
+    """Validate SPEC has correct features after degenerate removal."""
+
+    def test_spec_has_13_features(self) -> None:
+        assert len(SPEC.names) == 13
+
+    def test_feature_version_is_0_2_0(self) -> None:
+        assert FEATURE_VERSION == "0.2.0"
+        assert SPEC.version == "0.2.0"
+
+    def test_overround_not_in_spec(self) -> None:
+        assert "overround" not in SPEC.names
+
+    def test_price_discrepancy_not_in_spec(self) -> None:
+        assert "price_discrepancy" not in SPEC.names
+
+    def test_volume_ratio_not_in_spec(self) -> None:
+        assert "volume_ratio" not in SPEC.names
+
+    def test_cross_platform_params_removed(self) -> None:
+        """extract_features should no longer accept cross-platform kwargs."""
+        c = Contract(
+            source="kalshi", contract_id="T", title="T", category="c",
+            yes_price=0.5, no_price=0.5, yes_bid=0.49, yes_ask=0.51,
+            last_price=None, volume_24h=0.0, open_interest=0.0,
+            expires_at=None, url="", status="open",
+        )
+        with pytest.raises(TypeError):
+            extract_features(c, cross_platform_price=0.55)
 
 
 @pytest.fixture
@@ -117,13 +148,6 @@ class TestMarketFeatures:
         idx = SPEC.names.index("log_open_interest")
         assert features[idx] == pytest.approx(np.log1p(120_000.0))
 
-    def test_overround(self, contract: Contract) -> None:
-        # overround = yes_price + no_price - 1.0
-        features = extract_features(contract)
-        idx = SPEC.names.index("overround")
-        assert features[idx] == pytest.approx(0.0)  # 0.60 + 0.40 - 1.0
-
-
 class TestTemporalFeatures:
     """Time-based features: expiry, day-of-week, hour-of-day."""
 
@@ -173,35 +197,6 @@ class TestTemporalFeatures:
         features = extract_features(contract, now=now)
         idx = SPEC.names.index("hour_of_day")
         assert features[idx] == pytest.approx(14.0)
-
-
-class TestCrossPlatformFeatures:
-    """Cross-platform features (price_discrepancy, volume_ratio)."""
-
-    def test_price_discrepancy_with_match(self, contract: Contract) -> None:
-        features = extract_features(contract, cross_platform_price=0.55)
-        idx = SPEC.names.index("price_discrepancy")
-        assert features[idx] == pytest.approx(0.05)  # 0.60 - 0.55
-
-    def test_price_discrepancy_no_match_is_nan(self, contract: Contract) -> None:
-        features = extract_features(contract)
-        idx = SPEC.names.index("price_discrepancy")
-        assert np.isnan(features[idx])
-
-    def test_volume_ratio_with_match(self, contract: Contract) -> None:
-        features = extract_features(contract, cross_platform_volume=25_000.0)
-        idx = SPEC.names.index("volume_ratio")
-        assert features[idx] == pytest.approx(50_000.0 / 25_000.0)
-
-    def test_volume_ratio_no_match_is_nan(self, contract: Contract) -> None:
-        features = extract_features(contract)
-        idx = SPEC.names.index("volume_ratio")
-        assert np.isnan(features[idx])
-
-    def test_volume_ratio_zero_cross_volume_is_nan(self, contract: Contract) -> None:
-        features = extract_features(contract, cross_platform_volume=0.0)
-        idx = SPEC.names.index("volume_ratio")
-        assert np.isnan(features[idx])
 
 
 class TestLagFeatures:

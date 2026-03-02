@@ -10,7 +10,7 @@ import numpy.typing as npt
 
 from arbiter.ingestion.base import Contract
 
-FEATURE_VERSION = "0.1.0"
+FEATURE_VERSION = "0.2.0"
 """Bump this when the feature schema changes. Stored in MarketSnapshot.feature_version
 so training can filter by compatible versions."""
 
@@ -35,12 +35,8 @@ SPEC = FeatureSpec(
         "log_volume_24h",
         "log_open_interest",
         "time_to_expiry_hours",
-        "overround",
         "day_of_week",
         "hour_of_day",
-        # Cross-platform features (NaN if no match)
-        "price_discrepancy",
-        "volume_ratio",
         # Lag features (NaN if no history)
         "price_delta_1h",
         "price_delta_24h",
@@ -52,8 +48,6 @@ SPEC = FeatureSpec(
 
 def extract_features(
     contract: Contract,
-    cross_platform_price: float | None = None,
-    cross_platform_volume: float | None = None,
     price_history: list[float] | None = None,
     volume_history: list[float] | None = None,
     *,
@@ -63,8 +57,6 @@ def extract_features(
 
     Args:
         contract: The normalized market contract.
-        cross_platform_price: YES price from the matched contract on the other platform.
-        cross_platform_volume: 24h volume from the matched contract.
         price_history: Historical YES prices (most recent last) for lag features.
         volume_history: Historical 24h volumes (most recent last) for lag features.
         now: Override current time (for testing). Defaults to UTC now.
@@ -90,22 +82,14 @@ def extract_features(
         features[6] = max(0.0, delta)
     # else: stays NaN
 
-    features[7] = contract.yes_price + contract.no_price - 1.0
-    features[8] = float(now.weekday())
-    features[9] = float(now.hour)
-
-    # --- Cross-platform features ---
-    if cross_platform_price is not None:
-        features[10] = contract.yes_price - cross_platform_price
-
-    if cross_platform_volume is not None and cross_platform_volume > 0:
-        features[11] = contract.volume_24h / cross_platform_volume
+    features[7] = float(now.weekday())
+    features[8] = float(now.hour)
 
     # --- Lag features ---
     if price_history is not None and len(price_history) >= 2:
-        features[12] = price_history[-1] - price_history[-2]  # delta_1h
-        features[13] = price_history[-1] - price_history[0]  # delta_24h
-        features[15] = float(np.std(price_history))  # volatility_24h
+        features[9] = price_history[-1] - price_history[-2]  # delta_1h
+        features[10] = price_history[-1] - price_history[0]  # delta_24h
+        features[12] = float(np.std(price_history))  # volatility_24h
     elif price_history is not None and len(price_history) == 1:
         # Single point: deltas and volatility undefined
         pass
@@ -113,6 +97,6 @@ def extract_features(
     if volume_history is not None and len(volume_history) >= 1:
         mean_vol = float(np.mean(volume_history))
         if mean_vol > 0:
-            features[14] = contract.volume_24h / mean_vol
+            features[11] = contract.volume_24h / mean_vol
 
     return features

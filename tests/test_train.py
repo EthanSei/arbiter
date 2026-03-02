@@ -6,13 +6,15 @@ from pathlib import Path
 
 import numpy as np
 
+from arbiter.models.calibration import PlattCalibrator
+from arbiter.models.features import SPEC
 from arbiter.training.train import train_model
 
 
 def _synthetic_dataset(n: int = 200) -> tuple:
     """Generate synthetic features and labels that LightGBM can learn from."""
     rng = np.random.default_rng(42)
-    features = rng.standard_normal((n, 16))
+    features = rng.standard_normal((n, len(SPEC.names)))
     # Deterministic labels correlated with first feature
     labels = (features[:, 0] > 0).astype(float)
     timestamps = np.arange(n, dtype=np.float64)
@@ -99,6 +101,42 @@ class TestTrainModel:
         for key, val in metrics.items():
             assert isinstance(val, float), f"{key} is not float"
             assert np.isfinite(val), f"{key} is not finite: {val}"
+
+    def test_calibrator_is_platt(self):
+        """Trained model should use PlattCalibrator, not IsotonicRegression."""
+        features, labels, timestamps = _synthetic_dataset()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = str(Path(tmpdir) / "model.pkl")
+            train_model(
+                features=features,
+                labels=labels,
+                timestamps=timestamps,
+                output_path=output_path,
+            )
+            with open(output_path, "rb") as f:
+                artifact = pickle.load(f)
+        assert isinstance(artifact["calibrator"], PlattCalibrator)
+
+    def test_calibrator_returns_probabilities(self):
+        """Calibrator predict() should return values in (0, 1), not class labels."""
+        features, labels, timestamps = _synthetic_dataset()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = str(Path(tmpdir) / "model.pkl")
+            train_model(
+                features=features,
+                labels=labels,
+                timestamps=timestamps,
+                output_path=output_path,
+            )
+            with open(output_path, "rb") as f:
+                artifact = pickle.load(f)
+        cal = artifact["calibrator"]
+        test_inputs = np.array([0.1, 0.3, 0.5, 0.7, 0.9])
+        preds = cal.predict(test_inputs)
+        assert preds.shape == (5,)
+        # Probabilities, not class labels — at least one value not in {0, 1}
+        assert not all(p in (0.0, 1.0) for p in preds)
+        assert np.all(preds >= 0.0) and np.all(preds <= 1.0)
 
     def test_dry_run_still_returns_metrics(self):
         """dry_run mode trains on a slice and still returns metrics."""

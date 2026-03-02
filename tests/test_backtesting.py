@@ -91,11 +91,8 @@ def _make_snapshot(
             "log_volume_24h": 6.9,  # log1p(1000) ~ 6.9
             "log_open_interest": 6.2,
             "time_to_expiry_hours": 720.0,
-            "overround": 0.0,
             "day_of_week": 3.0,
             "hour_of_day": 12.0,
-            "price_discrepancy": float("nan"),
-            "volume_ratio": float("nan"),
             "price_delta_1h": float("nan"),
             "price_delta_24h": float("nan"),
             "volume_ratio_24h": float("nan"),

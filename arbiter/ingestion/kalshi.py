@@ -174,7 +174,8 @@ class KalshiClient(MarketClient):
         resp = await self._http.get(url, params=params)
         resp.raise_for_status()
         data: dict[str, Any] = resp.json()
-        return data.get("candlesticks", [])
+        result: list[dict[str, Any]] = data.get("candlesticks", [])
+        return result
 
     async def fetch_candlesticks_batch(
         self,

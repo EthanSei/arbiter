@@ -117,15 +117,6 @@ class TestCandleToSample:
         )
         assert sample["time_to_expiry_hours"] == pytest.approx(48.0)
 
-    def test_overround_is_zero_for_synthetic(self) -> None:
-        """Overround = yes + no - 1, which is 0 when no_price = 1 - yes_price."""
-        sample = candle_to_sample(
-            CANDLE_48H_BEFORE,
-            close_time_ts=CLOSE_TS,
-            result="no",
-        )
-        assert sample["overround"] == pytest.approx(0.0)
-
     def test_day_of_week_and_hour(self) -> None:
         """day_of_week and hour_of_day should come from candle timestamp."""
         sample = candle_to_sample(
@@ -174,8 +165,6 @@ class TestCandleToSample:
         )
         assert math.isnan(sample["bid_ask_spread"])
         assert math.isnan(sample["log_open_interest"])
-        assert math.isnan(sample["price_discrepancy"])
-        assert math.isnan(sample["volume_ratio"])
 
     def test_lag_features_without_history(self) -> None:
         """Without price_history, lag features should be NaN."""
@@ -382,11 +371,8 @@ def _make_sample(yes_price: float, outcome: float, timestamp: float) -> dict[str
     sample["log_volume_24h"] = math.log1p(100)
     sample["log_open_interest"] = float("nan")
     sample["time_to_expiry_hours"] = 48.0
-    sample["overround"] = 0.0
     sample["day_of_week"] = 1.0
     sample["hour_of_day"] = 14.0
-    sample["price_discrepancy"] = float("nan")
-    sample["volume_ratio"] = float("nan")
     sample["price_delta_1h"] = float("nan")
     sample["price_delta_24h"] = float("nan")
     sample["volume_ratio_24h"] = float("nan")

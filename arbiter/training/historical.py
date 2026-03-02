@@ -10,6 +10,7 @@ from typing import Any
 
 import numpy as np
 
+from arbiter.backtesting.metrics import sharpe_ratio as _sharpe_ratio
 from arbiter.models.features import SPEC
 from arbiter.scoring.kelly import kelly_criterion
 
@@ -75,15 +76,9 @@ def candle_to_sample(
     else:
         sample["time_to_expiry_hours"] = NAN
 
-    sample["overround"] = yes_price + no_price - 1.0
-
     dt = datetime.fromtimestamp(ts, tz=UTC)
     sample["day_of_week"] = float(dt.weekday())
     sample["hour_of_day"] = float(dt.hour)
-
-    # Cross-platform features (not available from candle data)
-    sample["price_discrepancy"] = NAN
-    sample["volume_ratio"] = NAN
 
     # Lag features
     if price_history is not None and len(price_history) >= 2:
@@ -240,6 +235,7 @@ def backtest_from_csv(
     peak_bankroll = 1.0
     max_drawdown = 0.0
     trades: list[float] = []  # per-trade P&L
+    bet_sizes: list[float] = []  # per-trade bet size (for return normalization)
 
     for i in range(len(test_idx)):
         prob_yes = float(cal_preds[i])
@@ -250,14 +246,16 @@ def backtest_from_csv(
         yes_cost = market_price + fee_rate
         if 0 < yes_cost < 1:
             ev_yes = prob_yes - yes_cost
-            if ev_yes > ev_threshold:
+            if ev_yes >= ev_threshold:
                 payout_ratio = (1.0 / yes_cost) - 1.0
                 kelly = kelly_criterion(prob_yes, payout_ratio) * kelly_fraction
                 bet_size = min(kelly * bankroll, bankroll)
                 if bet_size > 0:
                     pnl = bet_size * payout_ratio if outcome == 1.0 else -bet_size
+                    pnl -= bet_size * fee_rate
                     bankroll += pnl
                     trades.append(pnl)
+                    bet_sizes.append(bet_size)
                     peak_bankroll = max(peak_bankroll, bankroll)
                     dd = (peak_bankroll - bankroll) / peak_bankroll
                     drawdown = dd if peak_bankroll > 0 else 0
@@ -270,14 +268,16 @@ def backtest_from_csv(
         prob_no = 1.0 - prob_yes
         if 0 < no_cost < 1:
             ev_no = prob_no - no_cost
-            if ev_no > ev_threshold:
+            if ev_no >= ev_threshold:
                 payout_ratio = (1.0 / no_cost) - 1.0
                 kelly = kelly_criterion(prob_no, payout_ratio) * kelly_fraction
                 bet_size = min(kelly * bankroll, bankroll)
                 if bet_size > 0:
                     pnl = bet_size * payout_ratio if outcome == 0.0 else -bet_size
+                    pnl -= bet_size * fee_rate
                     bankroll += pnl
                     trades.append(pnl)
+                    bet_sizes.append(bet_size)
                     peak_bankroll = max(peak_bankroll, bankroll)
                     dd = (peak_bankroll - bankroll) / peak_bankroll
                     drawdown = dd if peak_bankroll > 0 else 0
@@ -290,10 +290,9 @@ def backtest_from_csv(
     wins = sum(1 for t in trades if t > 0)
     win_rate = wins / len(trades)
 
-    # Sharpe: mean(returns) / std(returns)
-    mean_ret = float(np.mean(trades))
-    std_ret = float(np.std(trades))
-    sharpe = mean_ret / std_ret if std_ret > 0 else 0.0
+    # Sharpe: annualized, normalized by bet size (matching backtesting/metrics)
+    returns = [t / b for t, b in zip(trades, bet_sizes, strict=True) if b > 0]
+    sharpe = _sharpe_ratio(returns)
 
     return {
         "total_pnl": total_pnl,
