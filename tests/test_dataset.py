@@ -14,7 +14,7 @@ class TestTemporalSplit:
     def test_split_sizes_default(self):
         """Default split: 70% train, 15% val, 15% test."""
         n = 100
-        features = np.random.default_rng(42).standard_normal((n, 16))
+        features = np.random.default_rng(42).standard_normal((n, len(SPEC.names)))
         labels = np.random.default_rng(42).choice([0.0, 1.0], n)
         timestamps = np.arange(n, dtype=np.float64)
 
@@ -29,7 +29,7 @@ class TestTemporalSplit:
     def test_split_is_chronological(self):
         """Train timestamps < val timestamps < test timestamps."""
         n = 100
-        features = np.random.default_rng(42).standard_normal((n, 16))
+        features = np.random.default_rng(42).standard_normal((n, len(SPEC.names)))
         labels = np.random.default_rng(42).choice([0.0, 1.0], n)
         timestamps = np.arange(n, dtype=np.float64)
 

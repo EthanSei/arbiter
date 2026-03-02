@@ -103,9 +103,7 @@ async def run(args: argparse.Namespace) -> None:
             if (i + 1) % 20 == 0 or i == 0:
                 print(f"  [{i + 1}/{len(tickers)}] {ticker}")
             try:
-                raw_candles = await fetch_candles_for_market(
-                    rl, ticker, start_ts, now_ts
-                )
+                raw_candles = await fetch_candles_for_market(rl, ticker, start_ts, now_ts)
                 if raw_candles:
                     # Normalize from real API format to internal format
                     normalized = [normalize_kalshi_candle(c) for c in raw_candles]

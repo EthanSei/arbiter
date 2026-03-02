@@ -302,7 +302,7 @@ async def test_run_cycle_creates_market_snapshot(db_factory) -> None:
         snaps = (await session.execute(select(MarketSnapshot))).scalars().all()
     assert len(snaps) == 1
     assert snaps[0].contract_id == "SNAP-001"
-    assert snaps[0].feature_version == "0.1.0"
+    assert snaps[0].feature_version == "0.2.0"
     assert snaps[0].features is not None
 
 

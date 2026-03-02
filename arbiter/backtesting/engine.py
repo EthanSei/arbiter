@@ -133,12 +133,16 @@ class BacktestEngine:
                     if outcome is None:
                         continue  # cannot settle, skip
 
-                    # Position sizing via fractional Kelly
+                    # Position sizing via fractional Kelly (fee-adjusted, from ev.py)
                     entry_price = opp.market_price
                     if entry_price <= 0 or entry_price >= 1:
                         continue
 
-                    payout_ratio = (1.0 / entry_price) - 1.0
+                    cost = entry_price + self._fee_rate
+                    if cost <= 0 or cost >= 1:
+                        continue
+
+                    payout_ratio = (1.0 / cost) - 1.0
                     full_kelly = kelly_criterion(opp.model_probability, payout_ratio)
                     bet_fraction = full_kelly * self._kelly_fraction
                     bet_size = bankroll * bet_fraction
@@ -146,15 +150,13 @@ class BacktestEngine:
                     if bet_size <= 0:
                         continue
 
-                    # Settle: compute P&L based on direction and outcome
+                    # Settle: P&L based on fee-adjusted cost (matches ev.py)
                     if opp.direction == "yes":
-                        # Bought YES at entry_price, pays $1 if YES
-                        pnl = bet_size * ((1.0 / entry_price - 1.0) if outcome >= 0.5 else -1.0)
+                        pnl = bet_size * payout_ratio if outcome >= 0.5 else -bet_size
                     else:
-                        # Bought NO at entry_price (= 1 - yes_price), pays $1 if NO
-                        pnl = bet_size * ((1.0 / entry_price - 1.0) if outcome < 0.5 else -1.0)
+                        pnl = bet_size * payout_ratio if outcome < 0.5 else -bet_size
 
-                    # Subtract fee from pnl
+                    # Fee deducted on all trades
                     pnl -= bet_size * self._fee_rate
 
                     bankroll += pnl

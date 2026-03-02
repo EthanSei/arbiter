@@ -13,8 +13,9 @@ from pathlib import Path
 import lightgbm as lgb
 import numpy as np
 import numpy.typing as npt
-from sklearn.isotonic import IsotonicRegression
+from sklearn.linear_model import LogisticRegression
 
+from arbiter.models.calibration import PlattCalibrator
 from arbiter.models.features import SPEC
 from arbiter.training.dataset import temporal_split
 from arbiter.training.evaluate import brier_score, expected_calibration_error
@@ -51,7 +52,7 @@ def train_model(
     1. Load dataset (from args, CSV, or DB)
     2. Temporal train/val/test split
     3. Train LightGBM with binary logloss
-    4. Fit isotonic calibration on validation set
+    4. Fit Platt scaling (logistic regression) on validation set
     5. Evaluate: Brier score, ECE
     6. Save model + calibrator to output_path (unless dry_run)
 
@@ -94,20 +95,23 @@ def train_model(
         ],
     )
 
-    # Fit isotonic calibration on validation predictions
-    val_raw = booster.predict(x_val)
-    calibrator = IsotonicRegression(out_of_bounds="clip")
-    calibrator.fit(val_raw, y_val)
+    # Fit Platt scaling (logistic regression) on validation predictions
+    val_raw = np.asarray(booster.predict(x_val), dtype=np.float64)
+    lr = LogisticRegression()
+    lr.fit(val_raw.reshape(-1, 1), y_val)
+    calibrator = PlattCalibrator(lr)
 
-    # Evaluate calibrated predictions on val and test
-    val_cal = calibrator.predict(val_raw)
-    test_raw = booster.predict(x_test)
+    # Evaluate: val metrics use RAW (uncalibrated) predictions to avoid circular
+    # evaluation — the calibrator was fitted on val data, so evaluating calibrated
+    # val predictions would overfit (val_ece ≈ 0 always).
+    # Test metrics use calibrated predictions for true out-of-sample evaluation.
+    test_raw = np.asarray(booster.predict(x_test), dtype=np.float64)
     test_cal = calibrator.predict(test_raw)
 
     metrics = {
-        "val_brier": brier_score(val_cal, y_val),
+        "val_brier": brier_score(val_raw, y_val),
         "test_brier": brier_score(test_cal, y_test),
-        "val_ece": expected_calibration_error(val_cal, y_val),
+        "val_ece": expected_calibration_error(val_raw, y_val),
         "test_ece": expected_calibration_error(test_cal, y_test),
     }
 
