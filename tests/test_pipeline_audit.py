@@ -97,13 +97,12 @@ class TestSharpeRatioConsistency:
             _write_mock_model(model_path, prob=0.65)
             # Deterministic 60/40 win/loss pattern across 200 samples
             outcomes = [1.0 if i % 5 < 3 else 0.0 for i in range(200)]
-            samples = [
-                _make_sample(0.40, outcomes[i], float(i)) for i in range(200)
-            ]
+            samples = [_make_sample(0.40, outcomes[i], float(i)) for i in range(200)]
             _write_test_csv(csv_path, samples)
 
             result = backtest_from_csv(
-                str(model_path), str(csv_path),
+                str(model_path),
+                str(csv_path),
                 fee_rate=0.03,
                 kelly_fraction=0.01,  # tiny Kelly keeps bankroll ≈ 1.0
             )
@@ -148,8 +147,11 @@ class TestFeeConsistency:
             _write_test_csv(csv_path, samples)
 
             result = backtest_from_csv(
-                str(model_path), str(csv_path),
-                fee_rate=fee_rate, kelly_fraction=0.25, test_fraction=0.50,
+                str(model_path),
+                str(csv_path),
+                fee_rate=fee_rate,
+                kelly_fraction=0.25,
+                test_fraction=0.50,
             )
 
         assert result["num_trades"] == 1.0
@@ -204,8 +206,11 @@ class TestFeeDeductionOnWinningTrades:
             _write_test_csv(csv_path, samples)
 
             result = backtest_from_csv(
-                str(model_path), str(csv_path),
-                fee_rate=fee_rate, kelly_fraction=0.25, test_fraction=0.50,
+                str(model_path),
+                str(csv_path),
+                fee_rate=fee_rate,
+                kelly_fraction=0.25,
+                test_fraction=0.50,
             )
 
         assert result["num_trades"] == 1.0

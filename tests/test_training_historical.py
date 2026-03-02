@@ -45,9 +45,7 @@ SETTLED_MARKET_YES = {
 }
 
 # close_time as Unix timestamp
-CLOSE_TS = int(
-    datetime(2026, 1, 15, 21, 0, 0, tzinfo=UTC).timestamp()
-)
+CLOSE_TS = int(datetime(2026, 1, 15, 21, 0, 0, tzinfo=UTC).timestamp())
 
 # Candles: hourly intervals. end_period_ts is Unix seconds.
 # These are ~48h before close_time.
@@ -443,9 +441,7 @@ class TestBacktestFromCSV:
             samples = [_make_sample(0.50, 1.0, float(i)) for i in range(100)]
             _write_test_csv(csv_path, samples)
 
-            result = backtest_from_csv(
-                str(model_path), str(csv_path), test_fraction=0.20
-            )
+            result = backtest_from_csv(str(model_path), str(csv_path), test_fraction=0.20)
 
         # 20% of 100 = 20 test samples
         assert result["test_samples"] == 20.0

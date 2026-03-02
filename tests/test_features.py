@@ -31,10 +31,20 @@ class TestSpecSchema:
     def test_cross_platform_params_removed(self) -> None:
         """extract_features should no longer accept cross-platform kwargs."""
         c = Contract(
-            source="kalshi", contract_id="T", title="T", category="c",
-            yes_price=0.5, no_price=0.5, yes_bid=0.49, yes_ask=0.51,
-            last_price=None, volume_24h=0.0, open_interest=0.0,
-            expires_at=None, url="", status="open",
+            source="kalshi",
+            contract_id="T",
+            title="T",
+            category="c",
+            yes_price=0.5,
+            no_price=0.5,
+            yes_bid=0.49,
+            yes_ask=0.51,
+            last_price=None,
+            volume_24h=0.0,
+            open_interest=0.0,
+            expires_at=None,
+            url="",
+            status="open",
         )
         with pytest.raises(TypeError):
             extract_features(c, cross_platform_price=0.55)
@@ -147,6 +157,7 @@ class TestMarketFeatures:
         features = extract_features(contract)
         idx = SPEC.names.index("log_open_interest")
         assert features[idx] == pytest.approx(np.log1p(120_000.0))
+
 
 class TestTemporalFeatures:
     """Time-based features: expiry, day-of-week, hour-of-day."""

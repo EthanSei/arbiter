@@ -21,9 +21,7 @@ def main() -> None:
     parser.add_argument(
         "--model", type=str, default="models/arbiter_lgbm.pkl", help="Trained model path"
     )
-    parser.add_argument(
-        "--data", type=str, default="data/training.csv", help="Training CSV path"
-    )
+    parser.add_argument("--data", type=str, default="data/training.csv", help="Training CSV path")
     parser.add_argument(
         "--fee-rate", type=float, default=0.03, help="Execution cost (default: 0.03)"
     )

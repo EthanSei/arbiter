@@ -149,7 +149,7 @@ def build_training_samples(
         for i, candle in enumerate(qualifying):
             price_history: list[float] | None = None
             if i > 0:
-                price_history = [c["yes_price"]["close"] for c in qualifying[:i + 1]]
+                price_history = [c["yes_price"]["close"] for c in qualifying[: i + 1]]
 
             sample = candle_to_sample(
                 candle,
