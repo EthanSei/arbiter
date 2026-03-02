@@ -151,6 +151,64 @@ class KalshiClient(MarketClient):
                 break
         return results
 
+    async def fetch_candlesticks(
+        self,
+        ticker: str,
+        *,
+        series_ticker: str,
+        start_ts: int | None = None,
+        end_ts: int | None = None,
+        period_interval: int = 60,
+    ) -> list[dict[str, Any]]:
+        """Fetch OHLC candlestick data for a single market.
+
+        Uses: GET /series/{series_ticker}/markets/{ticker}/candlesticks
+        """
+        params: dict[str, str | int] = {"period_interval": period_interval}
+        if start_ts is not None:
+            params["start_ts"] = start_ts
+        if end_ts is not None:
+            params["end_ts"] = end_ts
+
+        url = f"{self._base_url}/series/{series_ticker}/markets/{ticker}/candlesticks"
+        resp = await self._http.get(url, params=params)
+        resp.raise_for_status()
+        data: dict[str, Any] = resp.json()
+        return data.get("candlesticks", [])
+
+    async def fetch_candlesticks_batch(
+        self,
+        tickers: list[str],
+        *,
+        start_ts: int | None = None,
+        end_ts: int | None = None,
+        period_interval: int = 60,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Fetch OHLC candlestick data for multiple markets (up to 100 per request).
+
+        Uses: GET /markets/candlesticks with comma-separated tickers param.
+        Automatically chunks into multiple requests when >100 tickers.
+        """
+        result: dict[str, list[dict[str, Any]]] = {}
+        chunk_size = 100
+        for i in range(0, len(tickers), chunk_size):
+            chunk = tickers[i : i + chunk_size]
+            params: dict[str, str | int] = {
+                "tickers": ",".join(chunk),
+                "period_interval": period_interval,
+            }
+            if start_ts is not None:
+                params["start_ts"] = start_ts
+            if end_ts is not None:
+                params["end_ts"] = end_ts
+
+            url = f"{self._base_url}/markets/candlesticks"
+            resp = await self._http.get(url, params=params)
+            resp.raise_for_status()
+            data: dict[str, Any] = resp.json()
+            result.update(data.get("candlesticks", {}))
+        return result
+
     async def close(self) -> None:
         pass  # Client is borrowed, not owned
 

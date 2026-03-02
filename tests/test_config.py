@@ -34,10 +34,21 @@ class TestConfigValidation:
         assert 0 < s.kelly_fraction < 1
         assert s.fee_rate >= 0
 
-    def test_kalshi_target_series_default_empty(self):
+    def test_kalshi_target_series_defaults_to_economics(self):
         s = Settings()
-        assert s.kalshi_target_series == ""
+        tickers = [t.strip() for t in s.kalshi_target_series.split(",")]
+        assert "KXCPI" in tickers
+        assert "KXPAYROLLS" in tickers
+        assert "KXCPIYOY" in tickers
 
     def test_kalshi_target_series_accepts_comma_separated(self):
         s = Settings(kalshi_target_series="KXCPI,KXPAYROLLS,KXCPIYOY")
         assert s.kalshi_target_series == "KXCPI,KXPAYROLLS,KXCPIYOY"
+
+    def test_polymarket_enabled_default_false(self):
+        s = Settings()
+        assert s.polymarket_enabled is False
+
+    def test_polymarket_enabled_accepts_true(self):
+        s = Settings(polymarket_enabled=True)
+        assert s.polymarket_enabled is True
