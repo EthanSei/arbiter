@@ -1,5 +1,6 @@
-"""Tests for alert channels (Discord webhook)."""
+"""Tests for alert channels (Discord webhook, Stdout)."""
 
+import json
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
@@ -7,6 +8,7 @@ import httpx
 import pytest
 
 from arbiter.alerts.discord import DiscordChannel
+from arbiter.alerts.stdout import StdoutChannel
 from arbiter.ingestion.base import Contract
 from arbiter.scoring.ev import ScoredOpportunity
 
@@ -276,3 +278,41 @@ class TestDiscordChannel:
         field_names = {f["name"] for f in embed["fields"]}
         assert "Direction" in field_names
         assert "Model Probability" in field_names
+
+
+class TestStdoutChannel:
+    async def test_send_prints_valid_json(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """send() prints a single JSON line to stdout."""
+        channel = StdoutChannel()
+        await channel.send(_make_opportunity())
+        out = capsys.readouterr().out.strip()
+        data = json.loads(out)
+        assert data["contract_id"] == "TEST-001"
+        assert data["direction"] == "yes"
+
+    async def test_send_includes_all_required_fields(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """send() output includes all key opportunity fields."""
+        channel = StdoutChannel()
+        await channel.send(_make_opportunity())
+        data = json.loads(capsys.readouterr().out)
+        assert all(
+            k in data
+            for k in [
+                "strategy",
+                "contract_id",
+                "title",
+                "direction",
+                "market_price",
+                "model_probability",
+                "expected_value",
+                "kelly_size",
+                "url",
+            ]
+        )
+
+    async def test_close_is_no_op(self) -> None:
+        """close() completes without raising."""
+        channel = StdoutChannel()
+        await channel.close()

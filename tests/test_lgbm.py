@@ -95,6 +95,10 @@ class TestLGBMEstimatorNoModel:
         estimator = LGBMEstimator(model_path=None)
         assert estimator.model_loaded is False
 
+    def test_calibrated_is_false_without_model(self) -> None:
+        estimator = LGBMEstimator(model_path=None)
+        assert estimator.calibrated is False
+
 
 class TestLGBMEstimatorWithModel:
     """Behavior with a loaded model."""
@@ -119,6 +123,14 @@ class TestLGBMEstimatorWithModel:
     def test_model_loaded_is_true_when_injected(self) -> None:
         estimator = _build_estimator(_make_mock_model())
         assert estimator.model_loaded is True
+
+    def test_calibrated_is_false_without_calibrator(self) -> None:
+        estimator = _build_estimator(_make_mock_model(), calibrator=None)
+        assert estimator.calibrated is False
+
+    def test_calibrated_is_true_with_calibrator(self) -> None:
+        estimator = _build_estimator(_make_mock_model(), _make_mock_calibrator())
+        assert estimator.calibrated is True
 
     async def test_clamps_output_to_valid_range(self, contract: Contract) -> None:
         model = _make_mock_model(raw_output=1.1)
@@ -175,3 +187,31 @@ class TestLGBMEstimatorFeatureIntegration:
         await estimator.estimate(contract)
         call_args = model.predict.call_args[0][0]
         assert call_args.shape == (1, len(SPEC.names))
+
+
+class TestLGBMEstimatorPredictionErrors:
+    """Graceful fallback when the model raises during prediction."""
+
+    async def test_prediction_exception_falls_back_to_midpoint(
+        self, contract: Contract
+    ) -> None:
+        model = MagicMock()
+        model.predict.side_effect = Exception(
+            "The number of features in data (13) is not the same as it was in training data (16)."
+        )
+        estimator = _build_estimator(model)
+
+        prob = await estimator.estimate(contract)
+        # Falls back to market midpoint (yes_price=0.60)
+        assert prob == pytest.approx(0.60)
+
+    async def test_prediction_exception_does_not_propagate(
+        self, contract: Contract
+    ) -> None:
+        model = MagicMock()
+        model.predict.side_effect = ValueError("feature mismatch")
+        estimator = _build_estimator(model)
+
+        # Should not raise
+        prob = await estimator.estimate(contract)
+        assert 0.0 < prob < 1.0
