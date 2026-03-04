@@ -12,7 +12,11 @@ import httpx
 
 from arbiter.alerts.base import AlertChannel
 from arbiter.alerts.discord import DiscordChannel
+from arbiter.alerts.stdout import StdoutChannel
 from arbiter.config import settings
+from arbiter.data.providers.base import FeatureProvider
+from arbiter.data.providers.bls import BLSComponentProvider
+from arbiter.data.providers.fred import FREDSurpriseProvider
 from arbiter.db.session import async_session_factory, engine, init_db
 from arbiter.health import start_health_server
 from arbiter.ingestion.base import MarketClient
@@ -30,7 +34,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def main() -> None:
+async def main(stdout_alerts: bool = False) -> None:
     """Initialise all components and run the scan pipeline."""
     logger.info("Arbiter starting")
 
@@ -73,14 +77,29 @@ async def main() -> None:
         model_path = None
     estimator = LGBMEstimator(model_path)
 
-    channels: list[AlertChannel] = [DiscordChannel(settings.discord_webhook_url)]
+    channels: list[AlertChannel] = (
+        [StdoutChannel()]
+        if stdout_alerts
+        else [DiscordChannel(settings.discord_webhook_url)]
+    )
+
+    # Anchor providers: FREDSurpriseProvider + BLSComponentProvider load from
+    # data/features/{fred,bls}/ JSON caches populated by `make fetch-data`.
+    anchor_providers: list[FeatureProvider] = [
+        FREDSurpriseProvider(),
+        BLSComponentProvider(),
+    ]
 
     # When targeting specific series, use a CategoryRouter that routes
-    # Economics/Financials to [EV + Consistency] and others to [EV only].
+    # Economics/Financials to [EV + Consistency + Anchor] and others to [EV only].
+    # Skip YesOnlyEVStrategy when the model is not calibrated — raw uncalibrated
+    # probabilities produce too many false signals.
     target_categories = ["Economics", "Financials"] if series_tickers else None
     strategies = build_default_strategies(
         fee_rate=settings.fee_rate,
         target_categories=target_categories,
+        anchor_providers=anchor_providers,
+        include_ev=estimator.calibrated,
     )
 
     pipeline = ScanPipeline(
@@ -90,6 +109,7 @@ async def main() -> None:
         session_factory=async_session_factory,
         ev_threshold=settings.ev_threshold,
         fee_rate=settings.fee_rate,
+        kelly_fraction=settings.kelly_fraction,
         strategies=strategies,
     )
 

@@ -20,7 +20,7 @@ from arbiter.ingestion.base import Contract, MarketClient
 from arbiter.models.base import ProbabilityEstimator
 from arbiter.models.features import FEATURE_VERSION, SPEC, extract_features
 from arbiter.scoring.ev import ScoredOpportunity
-from arbiter.scoring.strategy import ConsistencyStrategy, EVStrategy, Strategy
+from arbiter.scoring.strategy import ConsistencyStrategy, Strategy, YesOnlyEVStrategy
 from arbiter.trading.paper import PaperTrader
 
 logger = logging.getLogger(__name__)
@@ -47,6 +47,7 @@ class ScanPipeline:
         session_factory: async_sessionmaker[AsyncSession],
         ev_threshold: float = 0.05,
         fee_rate: float = 0.01,
+        kelly_fraction: float = 1.0,
         strategies: list[Strategy] | None = None,
         paper_trader: PaperTrader | None = None,
     ) -> None:
@@ -56,12 +57,13 @@ class ScanPipeline:
         self._session_factory = session_factory
         self._ev_threshold = ev_threshold
         self._fee_rate = fee_rate
+        self._kelly_fraction = kelly_fraction
         self._paper_trader = paper_trader
         self._strategies = (
             strategies
             if strategies is not None
             else [
-                EVStrategy(fee_rate),
+                YesOnlyEVStrategy(fee_rate),
                 ConsistencyStrategy(fee_rate),
             ]
         )
@@ -104,6 +106,11 @@ class ScanPipeline:
                 all_scored.extend(scored)
             except Exception as exc:
                 logger.warning("Strategy %s failed: %s", strategy.name, exc)
+
+        # Apply fractional Kelly scaling (e.g., 0.25 for quarter-Kelly)
+        if self._kelly_fraction != 1.0:
+            for opp in all_scored:
+                opp.kelly_size *= self._kelly_fraction
 
         # 3. Group by (contract_id, direction), take max EV per key
         best_by_key: dict[tuple[str, str], ScoredOpportunity] = {}

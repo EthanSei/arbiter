@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import pickle
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,8 @@ import numpy as np
 from arbiter.ingestion.base import Contract
 from arbiter.models.base import ProbabilityEstimator
 from arbiter.models.features import extract_features
+
+logger = logging.getLogger(__name__)
 
 # Clamp epsilon to avoid returning exactly 0 or 1
 _EPS = 1e-6
@@ -41,12 +44,24 @@ class LGBMEstimator(ProbabilityEstimator):
     def model_loaded(self) -> bool:
         return self._model is not None
 
+    @property
+    def calibrated(self) -> bool:
+        return self._calibrator is not None
+
     async def estimate(self, contract: Contract) -> float:
         if not self.model_loaded:
             return float(np.clip(contract.yes_price, _EPS, 1.0 - _EPS))
 
         features = extract_features(contract)
-        raw = self._model.predict(features.reshape(1, -1))
+        try:
+            raw = self._model.predict(features.reshape(1, -1))
+        except Exception:
+            logger.warning(
+                "Model prediction failed for %s — falling back to market midpoint",
+                contract.contract_id,
+                exc_info=True,
+            )
+            return float(np.clip(contract.yes_price, _EPS, 1.0 - _EPS))
         prob = float(raw[0])
 
         if self._calibrator is not None:

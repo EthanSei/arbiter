@@ -1,4 +1,4 @@
-"""Tests for Strategy ABC, EVStrategy, ConsistencyStrategy, and pipeline integration."""
+"""Tests for scoring strategies and pipeline integration."""
 
 from __future__ import annotations
 
@@ -6,12 +6,14 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from arbiter.alerts.base import AlertChannel
+from arbiter.data.providers.base import FeatureSet
 from arbiter.db.models import Base
 from arbiter.ingestion.base import Contract, MarketClient
 from arbiter.models.base import ProbabilityEstimator
 from arbiter.scheduler import ScanPipeline
 from arbiter.scoring.ev import ScoredOpportunity
 from arbiter.scoring.strategy import (
+    AnchorStrategy,
     CategoryRouter,
     ConsistencyStrategy,
     EVStrategy,
@@ -275,7 +277,7 @@ class TestPipelineWithStrategies:
         assert channel.sent[0].strategy_name == "_AlwaysAlertStrategy"
 
     async def test_default_strategies_backward_compat(self, db_factory) -> None:
-        """Pipeline with no strategies param uses EVStrategy + ConsistencyStrategy."""
+        """Pipeline with no strategies param fires at least one alert."""
         channel = _RecordingChannel()
         pipeline = ScanPipeline(
             clients=[_OkClient([_contract(yes_price=0.30)])],
@@ -287,6 +289,37 @@ class TestPipelineWithStrategies:
         )
         alerts = await pipeline.run_cycle()
         assert alerts >= 1
+
+    def test_default_strategies_use_yes_only_ev(self) -> None:
+        """Pipeline default is YesOnlyEVStrategy + ConsistencyStrategy (YES-side only)."""
+        pipeline = ScanPipeline(
+            clients=[],
+            estimator=_FixedEstimator(),
+            channels=[],
+            session_factory=None,  # type: ignore[arg-type]
+            ev_threshold=0.05,
+            fee_rate=0.01,
+        )
+        assert isinstance(pipeline._strategies[0], YesOnlyEVStrategy)
+        assert isinstance(pipeline._strategies[1], ConsistencyStrategy)
+
+    async def test_kelly_fraction_scales_kelly_size(self, db_factory) -> None:
+        """kelly_fraction param multiplies kelly_size on all scored opportunities."""
+        channel = _RecordingChannel()
+        pipeline = ScanPipeline(
+            clients=[_OkClient([_contract(yes_price=0.30)])],
+            estimator=_FixedEstimator(0.70),
+            channels=[channel],
+            session_factory=db_factory,
+            ev_threshold=0.05,
+            fee_rate=0.0,
+            kelly_fraction=0.25,
+            strategies=[_AlwaysAlertStrategy()],  # kelly_size=0.30 fixed
+        )
+        await pipeline.run_cycle()
+        assert len(channel.sent) == 1
+        # Full Kelly from _AlwaysAlertStrategy is 0.30; quarter-Kelly → 0.075
+        assert channel.sent[0].kelly_size == pytest.approx(0.075)
 
 
 # ---------------------------------------------------------------------------
@@ -322,9 +355,10 @@ class TestBuildDefaultStrategies:
         assert len(strategies) == 1
         assert isinstance(strategies[0], CategoryRouter)
 
-    async def test_router_routes_economics_to_both_strategies(self) -> None:
+    async def test_router_routes_economics_to_consistency_without_anchor(self) -> None:
         from arbiter.scoring.strategy import build_default_strategies
 
+        # Without anchor, targeted categories fall back to EV + Consistency
         strategies = build_default_strategies(
             fee_rate=0.0,
             target_categories=["Economics"],
@@ -332,9 +366,57 @@ class TestBuildDefaultStrategies:
         router = strategies[0]
         contracts = [_contract(yes_price=0.30, category="Economics")]
         results = await router.score(contracts, _FixedEstimator(0.70))
-        # YesOnlyEVStrategy produces yes direction only
         assert len(results) >= 1
         assert any(r.strategy_name == "YesOnlyEVStrategy" for r in results)
+
+    def test_include_ev_false_returns_only_consistency(self) -> None:
+        from arbiter.scoring.strategy import build_default_strategies
+
+        strategies = build_default_strategies(fee_rate=0.01, include_ev=False)
+        assert len(strategies) == 1
+        assert isinstance(strategies[0], ConsistencyStrategy)
+
+    def test_include_ev_false_with_anchor_omits_ev(self) -> None:
+        from arbiter.scoring.strategy import build_default_strategies
+
+        strategies = build_default_strategies(
+            fee_rate=0.01,
+            include_ev=False,
+            anchor_providers=[_MockProvider()],
+        )
+        assert not any(isinstance(s, YesOnlyEVStrategy) for s in strategies)
+        assert any(isinstance(s, ConsistencyStrategy) for s in strategies)
+        assert any(isinstance(s, AnchorStrategy) for s in strategies)
+
+    async def test_include_ev_false_with_target_categories_default_is_empty(self) -> None:
+        from arbiter.scoring.strategy import build_default_strategies
+
+        strategies = build_default_strategies(
+            fee_rate=0.0,
+            include_ev=False,
+            target_categories=["Economics"],
+        )
+        router = strategies[0]
+        # Non-targeted category: default=[] (no EV when uncalibrated)
+        contracts = [_contract(yes_price=0.30, category="Other")]
+        results = await router.score(contracts, _FixedEstimator(0.70))
+        assert results == []
+
+    async def test_router_excludes_ev_from_targeted_when_anchor_available(self) -> None:
+        from arbiter.scoring.strategy import build_default_strategies
+
+        mock_provider = _MockProvider()
+        strategies = build_default_strategies(
+            fee_rate=0.0,
+            target_categories=["Economics"],
+            anchor_providers=[mock_provider],
+        )
+        router = strategies[0]
+        # A non-T-suffix contract: AnchorStrategy skips it, ConsistencyStrategy runs
+        contracts = [_contract(yes_price=0.30, category="Economics")]
+        results = await router.score(contracts, _FixedEstimator(0.70))
+        strategy_names = {r.strategy_name for r in results}
+        assert "YesOnlyEVStrategy" not in strategy_names
 
     async def test_router_uses_ev_only_as_default(self) -> None:
         from arbiter.scoring.strategy import build_default_strategies
@@ -466,3 +548,231 @@ class TestCategoryRouter:
         )
         assert len(results) > 0
         assert any(r.expected_value > 0 for r in results)
+
+
+# ---------------------------------------------------------------------------
+# AnchorStrategy
+# ---------------------------------------------------------------------------
+
+
+class _MockProvider:
+    """Test double FeatureProvider that returns a fixed FeatureSet."""
+
+    def __init__(
+        self,
+        name: str = "mock",
+        feature_sets: dict[str, FeatureSet] | None = None,
+    ) -> None:
+        self._name = name
+        self._feature_sets = feature_sets or {}
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    def load(self, indicator_id: str) -> FeatureSet | None:
+        return self._feature_sets.get(indicator_id)
+
+
+def _anchor_contracts(
+    prefix: str = "KXCPI-26JAN",
+    thresholds: list[float] | None = None,
+    prices: list[float] | None = None,
+) -> list[Contract]:
+    """Create a group of T-suffix contracts for anchor testing."""
+    thresholds = thresholds or [0.002, 0.003, 0.004]
+    prices = prices or [0.60, 0.40, 0.08]
+    return [
+        _contract(
+            contract_id=f"{prefix}-T{t}",
+            yes_price=p,
+            volume_24h=100.0,
+        )
+        for t, p in zip(thresholds, prices, strict=True)
+    ]
+
+
+class TestAnchorStrategy:
+    def _fred_provider(
+        self, indicator_id: str = "KXCPI", mu: float = 0.003, sigma: float = 0.0015
+    ) -> _MockProvider:
+        return _MockProvider(
+            name="fred",
+            feature_sets={
+                indicator_id: FeatureSet(
+                    provider="fred",
+                    indicator_id=indicator_id,
+                    anchor_mu=mu,
+                    anchor_sigma=sigma,
+                )
+            },
+        )
+
+    def _bls_provider(self, indicator_id: str = "KXCPI") -> _MockProvider:
+        return _MockProvider(
+            name="bls",
+            feature_sets={
+                indicator_id: FeatureSet(
+                    provider="bls",
+                    indicator_id=indicator_id,
+                    features={"shelter_cpi_mom": 0.40, "energy_cpi_mom": -1.2},
+                )
+            },
+        )
+
+    async def test_returns_opportunities_for_underpriced_contracts(self) -> None:
+        # mu=0.003, sigma=0.0015 → P(X > 0.004) ≈ 25%, market at 8¢ → EV > 0
+        strategy = AnchorStrategy(
+            providers=[self._fred_provider()], fee_rate=0.01
+        )
+        contracts = _anchor_contracts()
+        results = await strategy.score(contracts, _FixedEstimator(0.50))
+        assert len(results) > 0
+        assert all(r.expected_value > 0 for r in results)
+        assert all(r.direction == "yes" for r in results)
+
+    async def test_returns_empty_for_fairly_priced_markets(self) -> None:
+        # All prices close to anchor probs → no mispricing
+        # mu=0.003, sigma=0.0015 → P(X>0.002)≈75%, P(X>0.003)≈50%, P(X>0.004)≈25%
+        strategy = AnchorStrategy(
+            providers=[self._fred_provider()], fee_rate=0.01
+        )
+        contracts = _anchor_contracts(prices=[0.75, 0.50, 0.25])
+        results = await strategy.score(contracts, _FixedEstimator(0.50))
+        assert len(results) == 0
+
+    async def test_ignores_contracts_without_matching_indicator(self) -> None:
+        # Provider only has KXCPI data, but contracts are KXFOO
+        strategy = AnchorStrategy(
+            providers=[self._fred_provider(indicator_id="KXCPI")], fee_rate=0.01
+        )
+        contracts = _anchor_contracts(prefix="KXFOO-26JAN")
+        results = await strategy.score(contracts, _FixedEstimator(0.50))
+        assert len(results) == 0
+
+    async def test_ignores_non_t_suffix_contracts(self) -> None:
+        # MAXMON-style contracts should pass through without error
+        strategy = AnchorStrategy(
+            providers=[self._fred_provider()], fee_rate=0.01
+        )
+        contracts = [
+            _contract(contract_id="KXBTCMAXMON-BTC-26MAR31-80000", yes_price=0.30),
+        ]
+        results = await strategy.score(contracts, _FixedEstimator(0.50))
+        assert len(results) == 0
+
+    async def test_aggregates_from_multiple_providers(self) -> None:
+        # FRED provides mu/sigma, BLS provides only features (no anchor params)
+        # Should still work — uses FRED's mu/sigma
+        strategy = AnchorStrategy(
+            providers=[self._fred_provider(), self._bls_provider()], fee_rate=0.01
+        )
+        contracts = _anchor_contracts()
+        results = await strategy.score(contracts, _FixedEstimator(0.50))
+        assert len(results) > 0
+
+    async def test_skips_provider_returning_none(self) -> None:
+        # Second provider returns None for this indicator — should still work
+        empty_provider = _MockProvider(name="empty")
+        strategy = AnchorStrategy(
+            providers=[self._fred_provider(), empty_provider], fee_rate=0.01
+        )
+        contracts = _anchor_contracts()
+        results = await strategy.score(contracts, _FixedEstimator(0.50))
+        assert len(results) > 0
+
+    async def test_strategy_name_is_anchor_strategy(self) -> None:
+        strategy = AnchorStrategy(
+            providers=[self._fred_provider()], fee_rate=0.01
+        )
+        contracts = _anchor_contracts()
+        results = await strategy.score(contracts, _FixedEstimator(0.50))
+        assert all(r.strategy_name == "AnchorStrategy" for r in results)
+
+    async def test_is_strategy_subclass(self) -> None:
+        strategy = AnchorStrategy(
+            providers=[self._fred_provider()], fee_rate=0.01
+        )
+        assert isinstance(strategy, Strategy)
+
+    async def test_empty_contracts(self) -> None:
+        strategy = AnchorStrategy(
+            providers=[self._fred_provider()], fee_rate=0.01
+        )
+        results = await strategy.score([], _FixedEstimator(0.50))
+        assert results == []
+
+    async def test_no_providers(self) -> None:
+        strategy = AnchorStrategy(providers=[], fee_rate=0.01)
+        contracts = _anchor_contracts()
+        results = await strategy.score(contracts, _FixedEstimator(0.50))
+        assert results == []
+
+    async def test_multiple_indicator_groups(self) -> None:
+        # Mix of KXCPI and KXJOBLESSCLAIMS contracts
+        fred = _MockProvider(
+            name="fred",
+            feature_sets={
+                "KXCPI": FeatureSet(
+                    provider="fred", indicator_id="KXCPI",
+                    anchor_mu=0.003, anchor_sigma=0.0015,
+                ),
+                "KXJOBLESSCLAIMS": FeatureSet(
+                    provider="fred", indicator_id="KXJOBLESSCLAIMS",
+                    anchor_mu=220.0, anchor_sigma=10.0,
+                ),
+            },
+        )
+        cpi_contracts = _anchor_contracts(prefix="KXCPI-26JAN", prices=[0.60, 0.40, 0.08])
+        claims_contracts = [
+            _contract(contract_id="KXJOBLESSCLAIMS-26MAR06-T210", yes_price=0.05, volume_24h=50),
+        ]
+        strategy = AnchorStrategy(providers=[fred], fee_rate=0.01)
+        results = await strategy.score(
+            cpi_contracts + claims_contracts, _FixedEstimator(0.50)
+        )
+        # Should have results from both groups
+        contract_ids = {r.contract.contract_id for r in results}
+        assert any("KXCPI" in cid for cid in contract_ids)
+        assert any("KXJOBLESSCLAIMS" in cid for cid in contract_ids)
+
+    async def test_strategy_name_uses_subclass_name(self) -> None:
+        """AnchorStrategy sets strategy_name via self.name, enabling subclassing."""
+
+        class _CustomAnchor(AnchorStrategy):
+            pass
+
+        strategy = _CustomAnchor(providers=[self._fred_provider()], fee_rate=0.0)
+        contracts = _anchor_contracts(prices=[0.60, 0.40, 0.08])
+        results = await strategy.score(contracts, _FixedEstimator(0.50))
+        assert len(results) > 0
+        assert all(r.strategy_name == "_CustomAnchor" for r in results)
+
+    async def test_skips_group_when_provider_returns_zero_sigma(self) -> None:
+        """AnchorStrategy returns empty when sigma=0 (avoids ValueError crash)."""
+        zero_sigma_provider = _MockProvider(
+            name="zero_sigma",
+            feature_sets={
+                "KXCPI": FeatureSet(
+                    provider="zero_sigma",
+                    indicator_id="KXCPI",
+                    anchor_mu=0.003,
+                    anchor_sigma=0.0,
+                )
+            },
+        )
+        strategy = AnchorStrategy(providers=[zero_sigma_provider], fee_rate=0.01)
+        contracts = _anchor_contracts(prices=[0.60, 0.40, 0.08])
+        results = await strategy.score(contracts, _FixedEstimator(0.50))
+        assert results == []
+
+    async def test_build_default_strategies_with_anchor(self) -> None:
+        from arbiter.scoring.strategy import build_default_strategies
+
+        strategies = build_default_strategies(
+            fee_rate=0.01,
+            target_categories=["Economics"],
+            anchor_providers=[self._fred_provider()],
+        )
+        assert len(strategies) == 1
+        assert isinstance(strategies[0], CategoryRouter)

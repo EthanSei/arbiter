@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     # Alerts — Discord
     discord_webhook_url: str = ""
 
+    # Data API Keys
+    fred_api_key: str = ""
+    bls_api_key: str = ""
+
     # Alerts — SMS (Twilio)
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""

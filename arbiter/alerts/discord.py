@@ -52,6 +52,8 @@ class DiscordChannel(AlertChannel):
 
     def _build_standard_payload(self, opp: ScoredOpportunity) -> dict[str, object]:
         """Standard embed for model-based EV alerts."""
+        is_anchor = opp.strategy_name == "AnchorStrategy"
+        prob_label = "Anchor P(X>K)" if is_anchor else "Model Probability"
         embed = {
             "title": f"[{opp.contract.source.upper()}] {opp.contract.title}",
             "url": opp.contract.url,
@@ -60,7 +62,7 @@ class DiscordChannel(AlertChannel):
                 {"name": "Direction", "value": opp.direction.upper(), "inline": True},
                 {"name": "Market Price", "value": f"{opp.market_price:.1%}", "inline": True},
                 {
-                    "name": "Model Probability",
+                    "name": prob_label,
                     "value": f"{opp.model_probability:.1%}",
                     "inline": True,
                 },
@@ -71,6 +73,7 @@ class DiscordChannel(AlertChannel):
                 },
                 {"name": "Kelly Size", "value": f"{opp.kelly_size:.1%}", "inline": True},
             ],
+            "footer": {"text": opp.strategy_name},
         }
         return {"embeds": [embed]}
 
@@ -114,7 +117,7 @@ class DiscordChannel(AlertChannel):
                     "inline": True,
                 },
             ],
-            "footer": {"text": "Monotonicity violation \u2014 acts fast, typically <1 min"},
+            "footer": {"text": f"{opp.strategy_name} \u2014 Monotonicity violation, acts fast"},
         }
         return {"embeds": [embed]}
 
@@ -176,6 +179,6 @@ class DiscordChannel(AlertChannel):
                     "inline": True,
                 },
             ],
-            "footer": {"text": "Monotonicity violation \u2014 acts fast, typically <1 min"},
+            "footer": {"text": f"{opp.strategy_name} \u2014 Monotonicity violation, acts fast"},
         }
         return {"embeds": [embed]}
