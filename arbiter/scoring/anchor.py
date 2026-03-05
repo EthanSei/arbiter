@@ -14,7 +14,10 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from collections.abc import Sequence
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from sklearn.linear_model import LogisticRegression
 
 from scipy.stats import norm
 
@@ -41,7 +44,7 @@ class PlattCalibrator:
     """
 
     def __init__(self) -> None:
-        self._lr: object | None = None
+        self._lr: LogisticRegression | None = None
 
     def fit(self, probs: list[float], outcomes: list[float]) -> PlattCalibrator:
         import numpy as np
@@ -64,7 +67,8 @@ class PlattCalibrator:
 
         arr = np.clip(x, 1e-6, 1 - 1e-6)
         features = logit(np.asarray(arr, dtype=float)).reshape(-1, 1)
-        return self._lr.predict_proba(features)[:, 1].tolist()
+        result: list[float] = self._lr.predict_proba(features)[:, 1].tolist()
+        return result
 
     @property
     def coef(self) -> tuple[float, float]:
