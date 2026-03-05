@@ -78,9 +78,7 @@ async def main(stdout_alerts: bool = False) -> None:
     estimator = LGBMEstimator(model_path)
 
     channels: list[AlertChannel] = (
-        [StdoutChannel()]
-        if stdout_alerts
-        else [DiscordChannel(settings.discord_webhook_url)]
+        [StdoutChannel()] if stdout_alerts else [DiscordChannel(settings.discord_webhook_url)]
     )
 
     # Anchor providers: FREDSurpriseProvider + BLSComponentProvider load from
@@ -90,16 +88,16 @@ async def main(stdout_alerts: bool = False) -> None:
         BLSComponentProvider(),
     ]
 
-    # When targeting specific series, use a CategoryRouter that routes
-    # Economics/Financials to [EV + Consistency + Anchor] and others to [EV only].
+    # IndicatorRouter routes contracts matching the INDICATORS registry
+    # (KXCPI, KXPAYROLLS, etc.) to [Consistency + Anchor] and others to [EV].
     # Skip YesOnlyEVStrategy when the model is not calibrated — raw uncalibrated
     # probabilities produce too many false signals.
-    target_categories = ["Economics", "Financials"] if series_tickers else None
+    calibrators_path = Path("models/anchor_calibrators.pkl")
     strategies = build_default_strategies(
         fee_rate=settings.fee_rate,
-        target_categories=target_categories,
         anchor_providers=anchor_providers,
         include_ev=estimator.calibrated,
+        calibrators_path=str(calibrators_path) if calibrators_path.exists() else None,
     )
 
     pipeline = ScanPipeline(

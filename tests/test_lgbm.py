@@ -192,9 +192,7 @@ class TestLGBMEstimatorFeatureIntegration:
 class TestLGBMEstimatorPredictionErrors:
     """Graceful fallback when the model raises during prediction."""
 
-    async def test_prediction_exception_falls_back_to_midpoint(
-        self, contract: Contract
-    ) -> None:
+    async def test_prediction_exception_falls_back_to_midpoint(self, contract: Contract) -> None:
         model = MagicMock()
         model.predict.side_effect = Exception(
             "The number of features in data (13) is not the same as it was in training data (16)."
@@ -205,9 +203,7 @@ class TestLGBMEstimatorPredictionErrors:
         # Falls back to market midpoint (yes_price=0.60)
         assert prob == pytest.approx(0.60)
 
-    async def test_prediction_exception_does_not_propagate(
-        self, contract: Contract
-    ) -> None:
+    async def test_prediction_exception_does_not_propagate(self, contract: Contract) -> None:
         model = MagicMock()
         model.predict.side_effect = ValueError("feature mismatch")
         estimator = _build_estimator(model)

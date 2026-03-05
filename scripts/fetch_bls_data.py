@@ -35,10 +35,10 @@ DATA_DIR = Path("data/features/bls")
 
 # BLS series IDs for CPI sub-components
 CPI_COMPONENTS = {
-    "food_cpi_mom": "CUSR0000SAF1",       # Food
-    "energy_cpi_mom": "CUSR0000SA0E",      # Energy
-    "shelter_cpi_mom": "CUSR0000SASLE",    # Shelter
-    "core_cpi_mom": "CUSR0000SA0L1E",      # Core (all items less food & energy)
+    "food_cpi_mom": "CUSR0000SAF1",  # Food
+    "energy_cpi_mom": "CUSR0000SA0E",  # Energy
+    "shelter_cpi_mom": "CUSR0000SASLE",  # Shelter
+    "core_cpi_mom": "CUSR0000SA0L1E",  # Core (all items less food & energy)
 }
 
 BLS_API_URL = "https://api.bls.gov/publicAPI/v2/timeseries/data/"

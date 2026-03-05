@@ -6,10 +6,11 @@ import logging
 from abc import ABC, abstractmethod
 from collections import defaultdict
 
+from arbiter.data.indicators import INDICATORS
 from arbiter.data.providers.base import FeatureProvider
 from arbiter.ingestion.base import Contract
 from arbiter.models.base import ProbabilityEstimator
-from arbiter.scoring.anchor import find_anchor_mispricings, group_anchor_contracts
+from arbiter.scoring.anchor import Calibrator, find_anchor_mispricings, group_anchor_contracts
 from arbiter.scoring.consistency import find_consistency_violations
 from arbiter.scoring.ev import ScoredOpportunity, compute_ev
 
@@ -122,9 +123,11 @@ class AnchorStrategy(Strategy):
         self,
         providers: list[FeatureProvider],
         fee_rate: float = 0.01,
+        calibrators: dict[str, Calibrator] | None = None,
     ) -> None:
         self._providers = providers
         self._fee_rate = fee_rate
+        self._calibrators = calibrators or {}
 
     async def score(
         self,
@@ -145,30 +148,32 @@ class AnchorStrategy(Strategy):
             if mu is None or sigma is None or sigma <= 0:
                 continue
 
-            opps = find_anchor_mispricings(group, mu, sigma, self._fee_rate)
+            config = INDICATORS.get(indicator_id)
+            threshold_scale = config.threshold_scale if config is not None else 1.0
+            calibrator = self._calibrators.get(indicator_id)
+            opps = find_anchor_mispricings(
+                group, mu, sigma, self._fee_rate, threshold_scale, calibrator
+            )
             for opp in opps:
                 opp.strategy_name = self.name
             results.extend(opps)
 
         return results
 
-    def _aggregate_anchor_params(
-        self, indicator_id: str
-    ) -> tuple[float | None, float | None]:
-        """Load FeatureSets from all providers and aggregate μ and σ."""
-        mu: float | None = None
-        sigma: float | None = None
+    def _aggregate_anchor_params(self, indicator_id: str) -> tuple[float | None, float | None]:
+        """Load FeatureSets from all providers and return the first (μ, σ) pair.
 
+        Uses the first provider that supplies both anchor_mu and anchor_sigma,
+        ensuring μ and σ come from the same data source.
+        """
         for provider in self._providers:
             fs = provider.load(indicator_id)
             if fs is None:
                 continue
-            if mu is None and fs.anchor_mu is not None:
-                mu = fs.anchor_mu
-            if sigma is None and fs.anchor_sigma is not None:
-                sigma = fs.anchor_sigma
+            if fs.anchor_mu is not None and fs.anchor_sigma is not None:
+                return fs.anchor_mu, fs.anchor_sigma
 
-        return mu, sigma
+        return None, None
 
 
 def _extract_indicator_id(group_key: str) -> str | None:
@@ -185,9 +190,9 @@ def _extract_indicator_id(group_key: str) -> str | None:
 
 def build_default_strategies(
     fee_rate: float = 0.01,
-    target_categories: list[str] | None = None,
     anchor_providers: list[FeatureProvider] | None = None,
     include_ev: bool = True,
+    calibrators_path: str | None = None,
 ) -> list[Strategy]:
     """Build the default strategy list.
 
@@ -196,32 +201,76 @@ def build_default_strategies(
     Pass include_ev=False to omit it when the model is not calibrated —
     raw uncalibrated probabilities produce too many false signals.
 
-    When target_categories is provided, returns a CategoryRouter that routes
-    those categories to [EV? + Consistency + Anchor?] and others to [EV?] only.
+    When anchor_providers are given, returns an IndicatorRouter that routes
+    contracts matching the INDICATORS registry to [Consistency + Anchor] and
+    all others to [EV] (or nothing when uncalibrated).
 
-    When target_categories is None, returns the flat list.
+    Without anchor_providers, returns the flat list [EV? + Consistency].
     """
     ev: list[Strategy] = [YesOnlyEVStrategy(fee_rate)] if include_ev else []
+    calibrators: dict[str, Calibrator] | None = None
+    if calibrators_path is not None:
+        import pickle
+
+        with open(calibrators_path, "rb") as _f:
+            calibrators = pickle.load(_f)  # noqa: S301
     anchor: list[Strategy] = (
-        [AnchorStrategy(anchor_providers, fee_rate)] if anchor_providers else []
+        [AnchorStrategy(anchor_providers, fee_rate, calibrators)] if anchor_providers else []
     )
 
-    if not target_categories:
-        return ev + [ConsistencyStrategy(fee_rate)] + anchor
+    if not anchor:
+        return ev + [ConsistencyStrategy(fee_rate)]
 
-    # For targeted categories (Economics/Financials), exclude LightGBM EV when anchor
-    # is available: the model has no current-cycle knowledge for economic releases and
-    # generates unreliable signals. AnchorStrategy is the correct pricer for these.
-    # Fall back to EV only when no anchor data exists.
-    targeted = (
-        [ConsistencyStrategy(fee_rate)] + anchor
-        if anchor
-        else ev + [ConsistencyStrategy(fee_rate)]
-    )
-    default = ev  # non-economics categories: EV only (or nothing when uncalibrated)
-    routes = {cat.lower(): targeted for cat in target_categories}
-    router = CategoryRouter(routes=routes, default=default)
+    # For indicator contracts (KXCPI, KXPAYROLLS, etc.), exclude LightGBM EV
+    # when anchor is available: the model has no current-cycle knowledge for
+    # economic releases and generates unreliable signals. AnchorStrategy is
+    # the correct pricer for these. Other contracts use EV only.
+    indicator_strategies = [ConsistencyStrategy(fee_rate)] + anchor
+    default = ev
+    router = IndicatorRouter(indicator_strategies=indicator_strategies, default=default)
     return [router]
+
+
+class IndicatorRouter(Strategy):
+    """Routes contracts by ticker prefix: known indicators → anchor strategies, rest → default.
+
+    Splits contracts based on whether their ticker prefix (e.g. ``KXCPI`` from
+    ``KXCPI-26JAN-T0.4``) matches a key in the ``INDICATORS`` registry. This
+    replaces the category-based routing that failed because Kalshi's API does
+    not return a ``category`` field.
+    """
+
+    def __init__(
+        self,
+        indicator_strategies: list[Strategy],
+        default: list[Strategy] | None = None,
+    ) -> None:
+        self._indicator_strategies = indicator_strategies
+        self._default = default or []
+
+    async def score(
+        self,
+        contracts: list[Contract],
+        estimator: ProbabilityEstimator,
+    ) -> list[ScoredOpportunity]:
+        indicator_contracts: list[Contract] = []
+        other_contracts: list[Contract] = []
+
+        for c in contracts:
+            prefix = c.contract_id.split("-")[0] if c.contract_id else ""
+            if prefix in INDICATORS:
+                indicator_contracts.append(c)
+            else:
+                other_contracts.append(c)
+
+        results: list[ScoredOpportunity] = []
+        if indicator_contracts:
+            for strategy in self._indicator_strategies:
+                results.extend(await strategy.score(indicator_contracts, estimator))
+        if other_contracts:
+            for strategy in self._default:
+                results.extend(await strategy.score(other_contracts, estimator))
+        return results
 
 
 class CategoryRouter(Strategy):
@@ -229,6 +278,10 @@ class CategoryRouter(Strategy):
 
     Composite pattern: CategoryRouter is itself a Strategy, so the pipeline
     doesn't need to know whether it holds flat strategies or a router.
+
+    .. note:: Kalshi's API does not populate the ``category`` field, so this
+       router is only useful with sources that provide categories. For
+       indicator-based routing, use :class:`IndicatorRouter` instead.
     """
 
     def __init__(

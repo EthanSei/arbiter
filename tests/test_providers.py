@@ -7,10 +7,10 @@ import os
 
 import pytest
 
-from arbiter.data.indicators import INDICATORS, get_indicator
+from arbiter.data.indicators import INDICATORS, IndicatorConfig, get_indicator
 from arbiter.data.providers.base import FeatureSet
 from arbiter.data.providers.bls import BLSComponentProvider
-from arbiter.data.providers.fred import FREDSurpriseProvider
+from arbiter.data.providers.fred import FREDSurpriseProvider, compute_sigma
 
 # ---------------------------------------------------------------------------
 # FeatureSet
@@ -213,6 +213,124 @@ class TestFREDSurpriseProvider:
         # With only 1 observation, can't compute sigma → return None
         assert result is None
 
+    def test_winsorize_reduces_sigma_with_outliers(self, tmp_path):
+        # 20 normal surprises ±100 with two COVID-scale outliers (±17000 = 170x normal)
+        # Mirrors real Payrolls data: typical ±100k monthly surprise, COVID ≈ -17,000k
+        normal = [
+            100.0,
+            -80.0,
+            120.0,
+            -90.0,
+            70.0,
+            -110.0,
+            80.0,
+            -60.0,
+            90.0,
+            -100.0,
+            110.0,
+            -70.0,
+            130.0,
+            -80.0,
+            60.0,
+            -120.0,
+            90.0,
+            -50.0,
+            100.0,
+            -90.0,
+        ]
+        outliers = [17000.0, -17000.0]
+        surprises = normal + outliers
+        obs = [
+            {"date": f"2020-{i:02d}-01", "actual": 0, "consensus": 0, "surprise": s}
+            for i, s in enumerate(surprises, start=1)
+        ]
+        data_dir = _make_fred_cache(str(tmp_path), "KXTEST", obs, 0.0)
+
+        provider_win = FREDSurpriseProvider(data_dir=data_dir, halflife=None, winsorize=True)
+        provider_raw = FREDSurpriseProvider(data_dir=data_dir, halflife=None, winsorize=False)
+        result_win = provider_win.load("KXTEST")
+        result_raw = provider_raw.load("KXTEST")
+
+        assert result_win is not None
+        assert result_raw is not None
+        # Winsorized sigma should be much smaller than raw (outlier-inflated) sigma
+        assert result_win.anchor_sigma < result_raw.anchor_sigma / 3.0
+
+    def test_winsorize_no_effect_without_outliers(self, tmp_path):
+        # Symmetric surprises within ±3σ — winsorization should not change sigma
+        surprises = [10.0, -10.0, 10.0, -10.0, 10.0, -10.0]
+        obs = [
+            {"date": f"2025-{i:02d}-01", "actual": 0, "consensus": 0, "surprise": s}
+            for i, s in enumerate(surprises, start=1)
+        ]
+        data_dir = _make_fred_cache(str(tmp_path), "KXTEST", obs, 0.0)
+
+        provider_win = FREDSurpriseProvider(data_dir=data_dir, halflife=None, winsorize=True)
+        provider_raw = FREDSurpriseProvider(data_dir=data_dir, halflife=None, winsorize=False)
+        result_win = provider_win.load("KXTEST")
+        result_raw = provider_raw.load("KXTEST")
+
+        assert result_win is not None
+        assert result_raw is not None
+        assert result_win.anchor_sigma == pytest.approx(result_raw.anchor_sigma, rel=0.01)
+
+    def test_default_provider_uses_winsorize(self, tmp_path):
+        # The default (no winsorize arg) should use winsorize=True
+        normal = [
+            100.0,
+            -80.0,
+            120.0,
+            -90.0,
+            70.0,
+            -110.0,
+            80.0,
+            -60.0,
+            90.0,
+            -100.0,
+            110.0,
+            -70.0,
+            130.0,
+            -80.0,
+            60.0,
+            -120.0,
+            90.0,
+            -50.0,
+            100.0,
+            -90.0,
+        ]
+        surprises = normal + [17000.0, -17000.0]
+        obs = [
+            {"date": f"2020-{i:02d}-01", "actual": 0, "consensus": 0, "surprise": s}
+            for i, s in enumerate(surprises, start=1)
+        ]
+        data_dir = _make_fred_cache(str(tmp_path), "KXTEST", obs, 0.0)
+
+        provider_default = FREDSurpriseProvider(data_dir=data_dir, halflife=None)
+        provider_raw = FREDSurpriseProvider(data_dir=data_dir, halflife=None, winsorize=False)
+        result_default = provider_default.load("KXTEST")
+        result_raw = provider_raw.load("KXTEST")
+
+        assert result_default is not None
+        assert result_raw is not None
+        assert result_default.anchor_sigma < result_raw.anchor_sigma
+
+
+# ---------------------------------------------------------------------------
+# _compute_sigma
+# ---------------------------------------------------------------------------
+
+
+class TestComputeSigma:
+    def test_halflife_zero_raises_value_error(self):
+        """halflife=0 raises ValueError."""
+        with pytest.raises(ValueError, match="halflife must be positive"):
+            compute_sigma([1.0, 2.0, 3.0], halflife=0)
+
+    def test_halflife_negative_raises_value_error(self):
+        """halflife < 0 raises ValueError."""
+        with pytest.raises(ValueError, match="halflife must be positive"):
+            compute_sigma([1.0, 2.0, 3.0], halflife=-5)
+
 
 # ---------------------------------------------------------------------------
 # BLSComponentProvider
@@ -327,5 +445,46 @@ class TestIndicatorConfig:
             assert config.kalshi_series == series
             assert len(config.providers) > 0
             assert config.fred_series
-            assert config.transform in ("level", "mom_pct", "mom_change")
+            assert config.transform in ("level", "mom_pct", "mom_change", "yoy_pct")
             assert config.recency_halflife > 0
+
+    def test_cpi_yoy_config(self):
+        config = get_indicator("KXCPIYOY")
+        assert config is not None
+        assert config.fred_series == "CPIAUCSL"
+        assert config.transform == "yoy_pct"
+        assert config.providers == ["fred"]
+
+    def test_cpi_core_yoy_config(self):
+        config = get_indicator("KXCPICOREYOY")
+        assert config is not None
+        assert config.fred_series == "CPILFESL"
+        assert config.transform == "yoy_pct"
+        assert config.providers == ["fred"]
+
+    def test_payrolls_config(self):
+        config = get_indicator("KXPAYROLLS")
+        assert config is not None
+        assert config.fred_series == "PAYEMS"
+        assert config.transform == "mom_change"
+        assert config.providers == ["fred"]
+
+    def test_pct_series_have_threshold_scale_001(self):
+        for series in ("KXCPI", "KXCPIYOY", "KXCPICOREYOY"):
+            config = get_indicator(series)
+            assert config is not None, f"{series} not in registry"
+            assert config.threshold_scale == pytest.approx(0.01), series
+
+    def test_payrolls_threshold_scale_converts_jobs_to_thousands(self):
+        config = get_indicator("KXPAYROLLS")
+        assert config is not None
+        assert config.threshold_scale == pytest.approx(0.001)
+
+    def test_jobless_claims_threshold_scale_is_one(self):
+        config = get_indicator("KXJOBLESSCLAIMS")
+        assert config is not None
+        assert config.threshold_scale == pytest.approx(1.0)
+
+    def test_default_threshold_scale_is_one(self):
+        config = IndicatorConfig(kalshi_series="KXTEST", providers=["fred"], fred_series="TEST")
+        assert config.threshold_scale == pytest.approx(1.0)

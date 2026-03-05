@@ -50,6 +50,8 @@ def fetch_and_cache(indicator_id: str, config: IndicatorConfig, fred: Fred) -> N
         values = series.pct_change().dropna()
     elif config.transform == "mom_change":
         values = series.diff().dropna()
+    elif config.transform == "yoy_pct":
+        values = series.pct_change(12).dropna()
     else:  # "level"
         values = series
 
@@ -69,14 +71,22 @@ def fetch_and_cache(indicator_id: str, config: IndicatorConfig, fred: Fred) -> N
     for date, actual, cons, surp in zip(
         values.index, values.values, consensus.values, surprises.values, strict=True
     ):
-        observations.append({
-            "date": date.strftime("%Y-%m-%d"),
-            "actual": float(actual),
-            "consensus": float(cons),
-            "surprise": float(surp),
-        })
+        observations.append(
+            {
+                "date": date.strftime("%Y-%m-%d"),
+                "actual": float(actual),
+                "consensus": float(cons),
+                "surprise": float(surp),
+            }
+        )
 
-    current_consensus = float(consensus.iloc[-1]) if len(consensus) > 0 else None
+    # Consensus for the *next* upcoming release, not the last observed one.
+    if len(values) == 0:
+        current_consensus = None
+    elif config.consensus_method == "moving_average_4w":
+        current_consensus = float(values.rolling(4, min_periods=1).mean().iloc[-1])
+    else:
+        current_consensus = float(values.iloc[-1])
 
     output = {
         "series": config.fred_series,

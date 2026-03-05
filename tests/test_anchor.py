@@ -8,6 +8,7 @@ import pytest
 
 from arbiter.ingestion.base import Contract
 from arbiter.scoring.anchor import (
+    PlattCalibrator,
     compute_anchor_prob,
     extract_threshold,
     find_anchor_mispricings,
@@ -245,3 +246,120 @@ class TestFindAnchorMispricings:
     def test_empty_group_returns_empty(self):
         results = find_anchor_mispricings([], mu=0.003, sigma=0.0015)
         assert results == []
+
+    def test_threshold_scale_converts_kalshi_pct_to_fred_decimal(self):
+        # Kalshi T0.3 means 0.3% MoM; FRED stores in decimal (0.003).
+        # With threshold_scale=0.01: 0.3 * 0.01 = 0.003 → same result as
+        # calling directly with threshold=0.003 and no scaling.
+        group_raw = [(0.003, _make_contract("KXCPI-26JAN-T0.003", 0.08))]
+        group_pct = [(0.3, _make_contract("KXCPI-26JAN-T0.003", 0.08))]
+        results_raw = find_anchor_mispricings(group_raw, mu=0.003, sigma=0.0015, fee_rate=0.01)
+        results_scaled = find_anchor_mispricings(
+            group_pct, mu=0.003, sigma=0.0015, fee_rate=0.01, threshold_scale=0.01
+        )
+        assert len(results_scaled) == len(results_raw)
+        if results_raw:
+            assert results_scaled[0].expected_value == pytest.approx(results_raw[0].expected_value)
+
+    def test_threshold_scale_default_one_preserves_existing_behaviour(self):
+        group = [(0.004, _make_contract("KXCPI-26JAN-T0.004", 0.08))]
+        results_default = find_anchor_mispricings(group, mu=0.003, sigma=0.0015, fee_rate=0.01)
+        results_explicit = find_anchor_mispricings(
+            group, mu=0.003, sigma=0.0015, fee_rate=0.01, threshold_scale=1.0
+        )
+        assert len(results_default) == len(results_explicit)
+
+    def test_calibrator_adjusts_model_probability(self):
+        """Calibrator.predict() is applied to anchor_prob before scoring."""
+
+        class _HalfCalibrator:
+            def predict(self, x: list[float]) -> list[float]:
+                return [v * 0.5 for v in x]
+
+        group = [(0.004, _make_contract("KXCPI-26JAN-T0.004", 0.05))]
+        raw_prob = compute_anchor_prob(0.004, mu=0.003, sigma=0.0015)
+        results = find_anchor_mispricings(
+            group, mu=0.003, sigma=0.0015, fee_rate=0.01, calibrator=_HalfCalibrator()
+        )
+        assert len(results) == 1
+        assert results[0].model_probability == pytest.approx(raw_prob * 0.5, abs=0.001)
+
+    def test_calibrator_can_eliminate_opportunity(self):
+        """Calibrator pushing prob to zero removes what was an opportunity."""
+
+        class _ZeroCalibrator:
+            def predict(self, x: list[float]) -> list[float]:
+                return [0.0 for _ in x]
+
+        group = [(0.004, _make_contract("KXCPI-26JAN-T0.004", 0.08))]
+        results = find_anchor_mispricings(
+            group, mu=0.003, sigma=0.0015, fee_rate=0.01, calibrator=_ZeroCalibrator()
+        )
+        assert results == []
+
+    def test_no_calibrator_preserves_raw_prob(self):
+        """calibrator=None produces identical results to no calibrator argument."""
+        group = [(0.004, _make_contract("KXCPI-26JAN-T0.004", 0.08))]
+        results_default = find_anchor_mispricings(group, mu=0.003, sigma=0.0015, fee_rate=0.01)
+        results_none = find_anchor_mispricings(
+            group, mu=0.003, sigma=0.0015, fee_rate=0.01, calibrator=None
+        )
+        assert len(results_none) == len(results_default)
+        if results_default:
+            assert results_none[0].model_probability == pytest.approx(
+                results_default[0].model_probability
+            )
+
+
+# ---------------------------------------------------------------------------
+# PlattCalibrator
+# ---------------------------------------------------------------------------
+
+
+class TestPlattCalibrator:
+    def _fit_simple(self) -> PlattCalibrator:
+        """Fit on data where high probs → outcome 1, low probs → outcome 0."""
+        probs = [0.1, 0.2, 0.3, 0.7, 0.8, 0.9] * 5
+        outcomes = [0, 0, 0, 1, 1, 1] * 5
+        return PlattCalibrator().fit(probs, outcomes)
+
+    def test_unfitted_predict_returns_input(self):
+        cal = PlattCalibrator()
+        result = cal.predict([0.2, 0.5, 0.8])
+        assert result == [0.2, 0.5, 0.8]
+
+    def test_unfitted_coef_returns_identity(self):
+        cal = PlattCalibrator()
+        assert cal.coef == (1.0, 0.0)
+
+    def test_fit_predict_roundtrip(self):
+        cal = self._fit_simple()
+        result = cal.predict([0.1, 0.5, 0.9])
+        assert len(result) == 3
+        assert all(0 <= p <= 1 for p in result)
+
+    def test_monotonically_increasing(self):
+        cal = self._fit_simple()
+        inputs = [0.1, 0.3, 0.5, 0.7, 0.9]
+        outputs = cal.predict(inputs)
+        for i in range(len(outputs) - 1):
+            assert outputs[i] < outputs[i + 1]
+
+    def test_coef_nontrivial_after_fit(self):
+        cal = self._fit_simple()
+        slope, intercept = cal.coef
+        assert slope != 1.0 or intercept != 0.0
+
+    def test_boundary_inputs(self):
+        cal = self._fit_simple()
+        result = cal.predict([0.0, 1.0])
+        assert len(result) == 2
+        assert all(0 <= p <= 1 for p in result)
+
+    def test_empty_input(self):
+        cal = self._fit_simple()
+        assert cal.predict([]) == []
+
+    def test_unfitted_empty_input(self):
+        cal = PlattCalibrator()
+        assert cal.predict([]) == []

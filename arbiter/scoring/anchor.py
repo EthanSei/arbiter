@@ -13,6 +13,11 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from sklearn.linear_model import LogisticRegression
 
 from scipy.stats import norm
 
@@ -21,6 +26,56 @@ from arbiter.scoring.ev import ScoredOpportunity
 from arbiter.scoring.kelly import kelly_criterion
 
 _T_SUFFIX_RE = re.compile(r"-T([\d.]+)K?$", re.IGNORECASE)
+
+
+class Calibrator(Protocol):
+    def predict(self, x: Sequence[float]) -> Sequence[float]: ...
+
+
+class PlattCalibrator:
+    """Platt scaling calibrator: logistic regression on log-odds.
+
+    Only 2 parameters (slope + intercept), resistant to overfitting on
+    small samples unlike isotonic regression.
+
+    Heavy imports (numpy, scipy.special, sklearn) are deferred to method
+    calls so that importing this module doesn't add startup latency when
+    calibrators are not used.
+    """
+
+    def __init__(self) -> None:
+        self._lr: LogisticRegression | None = None
+
+    def fit(self, probs: list[float], outcomes: list[float]) -> PlattCalibrator:
+        import numpy as np
+        from scipy.special import logit
+        from sklearn.linear_model import LogisticRegression
+
+        arr = np.clip(probs, 1e-6, 1 - 1e-6)
+        features = logit(arr).reshape(-1, 1)
+        y = np.array(outcomes)
+        lr = LogisticRegression(solver="lbfgs", max_iter=1000)
+        lr.fit(features, y)
+        self._lr = lr
+        return self
+
+    def predict(self, x: Sequence[float]) -> Sequence[float]:
+        if self._lr is None or len(x) == 0:
+            return list(x)
+        import numpy as np
+        from scipy.special import logit
+
+        arr = np.clip(x, 1e-6, 1 - 1e-6)
+        features = logit(np.asarray(arr, dtype=float)).reshape(-1, 1)
+        result: list[float] = self._lr.predict_proba(features)[:, 1].tolist()
+        return result
+
+    @property
+    def coef(self) -> tuple[float, float]:
+        """Return (slope, intercept) for diagnostics."""
+        if self._lr is None:
+            return (1.0, 0.0)
+        return (float(self._lr.coef_[0, 0]), float(self._lr.intercept_[0]))
 
 
 def extract_threshold(contract_id: str) -> tuple[str, float] | None:
@@ -79,16 +134,23 @@ def find_anchor_mispricings(
     mu: float,
     sigma: float,
     fee_rate: float = 0.01,
+    threshold_scale: float = 1.0,
+    calibrator: Calibrator | None = None,
 ) -> list[ScoredOpportunity]:
     """Compare anchor P(X>K) vs market YES price for each contract in a group.
 
     Flags contracts where anchor_prob > market_price + fee_rate (underpriced YES).
     Only produces YES-direction opportunities.
+
+    When ``calibrator`` is provided, applies ``calibrator.predict([anchor_prob])[0]``
+    to recalibrate the probability before scoring (e.g. isotonic regression).
     """
     results: list[ScoredOpportunity] = []
 
     for threshold, contract in group:
-        anchor_prob = compute_anchor_prob(threshold, mu, sigma)
+        anchor_prob = compute_anchor_prob(threshold * threshold_scale, mu, sigma)
+        if calibrator is not None:
+            anchor_prob = float(calibrator.predict([anchor_prob])[0])
         market_price = contract.yes_price
         ev = anchor_prob - market_price - fee_rate
 
