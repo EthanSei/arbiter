@@ -32,7 +32,6 @@ def kalshi_fee(price: float, is_taker: bool = True) -> float:
     return math.ceil(raw * 100) / 100
 
 
-
 def flat_fee_rate(rate: float) -> FeeFn:
     """Return a FeeFn that always returns a fixed rate regardless of price."""
 

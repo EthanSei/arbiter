@@ -66,9 +66,7 @@ class EVStrategy(Strategy):
         results: list[ScoredOpportunity] = []
         for contract in contracts:
             model_prob = await estimator.estimate(contract)
-            scored = compute_ev(
-                contract, model_prob, fee_rate=self._fee_rate, fee_fn=self._fee_fn
-            )
+            scored = compute_ev(contract, model_prob, fee_rate=self._fee_rate, fee_fn=self._fee_fn)
             for opp in scored:
                 opp.strategy_name = self.name
             results.extend(scored)
@@ -169,7 +167,12 @@ class AnchorStrategy(Strategy):
             threshold_scale = config.threshold_scale if config is not None else 1.0
             calibrator = self._calibrators.get(indicator_id)
             opps = find_anchor_mispricings(
-                group, mu, sigma, self._fee_rate, threshold_scale, calibrator,
+                group,
+                mu,
+                sigma,
+                self._fee_rate,
+                threshold_scale,
+                calibrator,
                 fee_fn=self._fee_fn,
             )
             for opp in opps:
@@ -230,9 +233,7 @@ def build_default_strategies(
         fee_rate: Legacy flat fee rate. Ignored when fee_fn is provided.
         fee_fn: Callable(price, is_taker) → fee. Overrides fee_rate when set.
     """
-    ev: list[Strategy] = (
-        [YesOnlyEVStrategy(fee_rate, fee_fn=fee_fn)] if include_ev else []
-    )
+    ev: list[Strategy] = [YesOnlyEVStrategy(fee_rate, fee_fn=fee_fn)] if include_ev else []
     calibrators: dict[str, Calibrator] | None = None
     if calibrators_path is not None:
         import pickle
