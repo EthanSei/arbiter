@@ -25,6 +25,7 @@ from arbiter.ingestion.polymarket import PolymarketClient
 from arbiter.ingestion.rate_limiter import RateLimitedClient
 from arbiter.models.lgbm import LGBMEstimator
 from arbiter.scheduler import ScanPipeline
+from arbiter.scoring.fees import FeeFn, flat_fee_rate, kalshi_fee
 from arbiter.scoring.strategy import build_default_strategies
 
 logging.basicConfig(
@@ -88,6 +89,17 @@ async def main(stdout_alerts: bool = False) -> None:
         BLSComponentProvider(),
     ]
 
+    # Fee model: parabolic (Kalshi real fees) or flat (legacy)
+    fee_fn: FeeFn | None = None
+    if settings.fee_model == "kalshi":
+        fee_fn = kalshi_fee
+        logger.info("Using Kalshi parabolic fee model")
+    elif settings.fee_model == "flat":
+        fee_fn = flat_fee_rate(settings.fee_rate)
+        logger.info("Using flat fee model (rate=%.4f)", settings.fee_rate)
+    else:
+        logger.warning("Unknown fee_model=%r — fees disabled", settings.fee_model)
+
     # IndicatorRouter routes contracts matching the INDICATORS registry
     # (KXCPI, KXPAYROLLS, etc.) to [Consistency + Anchor] and others to [EV].
     # Skip YesOnlyEVStrategy when the model is not calibrated — raw uncalibrated
@@ -98,6 +110,7 @@ async def main(stdout_alerts: bool = False) -> None:
         anchor_providers=anchor_providers,
         include_ev=estimator.calibrated,
         calibrators_path=str(calibrators_path) if calibrators_path.exists() else None,
+        fee_fn=fee_fn,
     )
 
     pipeline = ScanPipeline(
@@ -109,6 +122,7 @@ async def main(stdout_alerts: bool = False) -> None:
         fee_rate=settings.fee_rate,
         kelly_fraction=settings.kelly_fraction,
         strategies=strategies,
+        fee_fn=fee_fn,
     )
 
     health_task = asyncio.create_task(start_health_server(settings.health_port))

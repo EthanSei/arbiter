@@ -6,6 +6,7 @@ import pytest
 
 from arbiter.ingestion.base import Contract
 from arbiter.scoring.consistency import find_consistency_violations
+from arbiter.scoring.fees import kalshi_fee
 
 
 def _make_range_contract(
@@ -303,3 +304,23 @@ class TestFindConsistencyViolations:
         result = find_consistency_violations(contracts)
         assert len(result) == 1
         assert result[0].kelly_size > 0
+
+    def test_fee_fn_applies_parabolic_fee(self):
+        contracts = [
+            _btc_above(8000000, 0.31),
+            _btc_above(8250000, 0.50),
+        ]
+        flat_result = find_consistency_violations(contracts, fee_rate=0.01)
+        fn_result = find_consistency_violations(contracts, fee_fn=kalshi_fee)
+        # kalshi_fee(0.31, True) = ceil(0.07*0.31*0.69 * 100)/100 = ceil(1.4973)/100 = 0.02
+        # Flat fee = 0.01; parabolic fee = 0.02 → EV lower with fee_fn
+        assert fn_result[0].expected_value < flat_result[0].expected_value
+
+    def test_fee_fn_overrides_fee_rate(self):
+        contracts = [
+            _btc_above(8000000, 0.31),
+            _btc_above(8250000, 0.50),
+        ]
+        # When both provided, fee_fn takes precedence
+        result = find_consistency_violations(contracts, fee_rate=0.99, fee_fn=kalshi_fee)
+        assert len(result) == 1  # fee_rate=0.99 would eliminate edge, but fee_fn is used

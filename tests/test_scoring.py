@@ -6,6 +6,7 @@ import pytest
 
 from arbiter.ingestion.base import Contract
 from arbiter.scoring.ev import ScoredOpportunity, compute_ev
+from arbiter.scoring.fees import flat_fee_rate, kalshi_fee
 from arbiter.scoring.kelly import kelly_criterion
 
 
@@ -173,3 +174,29 @@ class TestComputeEV:
         assert len(results) == 2
         yes_result = next(r for r in results if r.direction == "yes")
         assert yes_result.kelly_size > 0
+
+    def test_fee_fn_overrides_fee_rate(self):
+        contract = _make_contract(yes_price=0.40, no_price=0.60)
+        # fee_fn should override fee_rate when both provided
+        results = compute_ev(
+            contract, model_prob_yes=0.60, fee_rate=0.10, fee_fn=flat_fee_rate(0.01)
+        )
+        yes_result = next(r for r in results if r.direction == "yes")
+        # EV = 0.60 - 0.40 - 0.01 = 0.19 (uses fee_fn=0.01, not fee_rate=0.10)
+        assert yes_result.expected_value == pytest.approx(0.19)
+
+    def test_fee_fn_kalshi_parabolic(self):
+        contract = _make_contract(yes_price=0.50, no_price=0.50)
+        results = compute_ev(contract, model_prob_yes=0.70, fee_fn=kalshi_fee)
+        yes_result = next(r for r in results if r.direction == "yes")
+        # kalshi_fee(0.50, True) = 0.02; EV = 0.70 - 0.50 - 0.02 = 0.18
+        assert yes_result.expected_value == pytest.approx(0.18)
+
+    def test_fee_fn_maker_vs_taker(self):
+        contract = _make_contract(yes_price=0.50, no_price=0.50)
+        taker = compute_ev(contract, model_prob_yes=0.70, fee_fn=kalshi_fee, is_taker=True)
+        maker = compute_ev(contract, model_prob_yes=0.70, fee_fn=kalshi_fee, is_taker=False)
+        yes_taker = next(r for r in taker if r.direction == "yes")
+        yes_maker = next(r for r in maker if r.direction == "yes")
+        # Maker fee < taker fee, so maker EV should be higher
+        assert yes_maker.expected_value > yes_taker.expected_value

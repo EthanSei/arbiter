@@ -13,6 +13,7 @@ from arbiter.models.base import ProbabilityEstimator
 from arbiter.scoring.anchor import Calibrator, find_anchor_mispricings, group_anchor_contracts
 from arbiter.scoring.consistency import find_consistency_violations
 from arbiter.scoring.ev import ScoredOpportunity, compute_ev
+from arbiter.scoring.fees import FeeFn
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +50,13 @@ class Strategy(ABC):
 class EVStrategy(Strategy):
     """Per-contract expected value scoring using model probability estimates."""
 
-    def __init__(self, fee_rate: float = 0.01) -> None:
+    def __init__(
+        self,
+        fee_rate: float = 0.01,
+        fee_fn: FeeFn | None = None,
+    ) -> None:
         self._fee_rate = fee_rate
+        self._fee_fn = fee_fn
 
     async def score(
         self,
@@ -60,7 +66,9 @@ class EVStrategy(Strategy):
         results: list[ScoredOpportunity] = []
         for contract in contracts:
             model_prob = await estimator.estimate(contract)
-            scored = compute_ev(contract, model_prob, self._fee_rate)
+            scored = compute_ev(
+                contract, model_prob, fee_rate=self._fee_rate, fee_fn=self._fee_fn
+            )
             for opp in scored:
                 opp.strategy_name = self.name
             results.extend(scored)
@@ -95,15 +103,22 @@ class ConsistencyStrategy(Strategy):
     Ignores the estimator — uses sibling prices as the probability floor.
     """
 
-    def __init__(self, fee_rate: float = 0.01) -> None:
+    def __init__(
+        self,
+        fee_rate: float = 0.01,
+        fee_fn: FeeFn | None = None,
+    ) -> None:
         self._fee_rate = fee_rate
+        self._fee_fn = fee_fn
 
     async def score(
         self,
         contracts: list[Contract],
         estimator: ProbabilityEstimator,
     ) -> list[ScoredOpportunity]:
-        results = find_consistency_violations(contracts, self._fee_rate)
+        results = find_consistency_violations(
+            contracts, fee_rate=self._fee_rate, fee_fn=self._fee_fn
+        )
         for opp in results:
             opp.strategy_name = self.name
         return results
@@ -124,10 +139,12 @@ class AnchorStrategy(Strategy):
         providers: list[FeatureProvider],
         fee_rate: float = 0.01,
         calibrators: dict[str, Calibrator] | None = None,
+        fee_fn: FeeFn | None = None,
     ) -> None:
         self._providers = providers
         self._fee_rate = fee_rate
         self._calibrators = calibrators or {}
+        self._fee_fn = fee_fn
 
     async def score(
         self,
@@ -152,7 +169,8 @@ class AnchorStrategy(Strategy):
             threshold_scale = config.threshold_scale if config is not None else 1.0
             calibrator = self._calibrators.get(indicator_id)
             opps = find_anchor_mispricings(
-                group, mu, sigma, self._fee_rate, threshold_scale, calibrator
+                group, mu, sigma, self._fee_rate, threshold_scale, calibrator,
+                fee_fn=self._fee_fn,
             )
             for opp in opps:
                 opp.strategy_name = self.name
@@ -193,6 +211,7 @@ def build_default_strategies(
     anchor_providers: list[FeatureProvider] | None = None,
     include_ev: bool = True,
     calibrators_path: str | None = None,
+    fee_fn: FeeFn | None = None,
 ) -> list[Strategy]:
     """Build the default strategy list.
 
@@ -206,8 +225,14 @@ def build_default_strategies(
     all others to [EV] (or nothing when uncalibrated).
 
     Without anchor_providers, returns the flat list [EV? + Consistency].
+
+    Args:
+        fee_rate: Legacy flat fee rate. Ignored when fee_fn is provided.
+        fee_fn: Callable(price, is_taker) → fee. Overrides fee_rate when set.
     """
-    ev: list[Strategy] = [YesOnlyEVStrategy(fee_rate)] if include_ev else []
+    ev: list[Strategy] = (
+        [YesOnlyEVStrategy(fee_rate, fee_fn=fee_fn)] if include_ev else []
+    )
     calibrators: dict[str, Calibrator] | None = None
     if calibrators_path is not None:
         import pickle
@@ -215,17 +240,15 @@ def build_default_strategies(
         with open(calibrators_path, "rb") as _f:
             calibrators = pickle.load(_f)  # noqa: S301
     anchor: list[Strategy] = (
-        [AnchorStrategy(anchor_providers, fee_rate, calibrators)] if anchor_providers else []
+        [AnchorStrategy(anchor_providers, fee_rate, calibrators, fee_fn=fee_fn)]
+        if anchor_providers
+        else []
     )
 
     if not anchor:
-        return ev + [ConsistencyStrategy(fee_rate)]
+        return ev + [ConsistencyStrategy(fee_rate, fee_fn=fee_fn)]
 
-    # For indicator contracts (KXCPI, KXPAYROLLS, etc.), exclude LightGBM EV
-    # when anchor is available: the model has no current-cycle knowledge for
-    # economic releases and generates unreliable signals. AnchorStrategy is
-    # the correct pricer for these. Other contracts use EV only.
-    indicator_strategies = [ConsistencyStrategy(fee_rate)] + anchor
+    indicator_strategies = [ConsistencyStrategy(fee_rate, fee_fn=fee_fn)] + anchor
     default = ev
     router = IndicatorRouter(indicator_strategies=indicator_strategies, default=default)
     return [router]

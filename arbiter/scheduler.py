@@ -20,6 +20,7 @@ from arbiter.ingestion.base import Contract, MarketClient
 from arbiter.models.base import ProbabilityEstimator
 from arbiter.models.features import FEATURE_VERSION, SPEC, extract_features
 from arbiter.scoring.ev import ScoredOpportunity
+from arbiter.scoring.fees import FeeFn
 from arbiter.scoring.strategy import ConsistencyStrategy, Strategy, YesOnlyEVStrategy
 from arbiter.trading.paper import PaperTrader
 
@@ -50,6 +51,7 @@ class ScanPipeline:
         kelly_fraction: float = 1.0,
         strategies: list[Strategy] | None = None,
         paper_trader: PaperTrader | None = None,
+        fee_fn: FeeFn | None = None,
     ) -> None:
         self._clients = clients
         self._estimator = estimator
@@ -59,12 +61,13 @@ class ScanPipeline:
         self._fee_rate = fee_rate
         self._kelly_fraction = kelly_fraction
         self._paper_trader = paper_trader
+        self._fee_fn = fee_fn
         self._strategies = (
             strategies
             if strategies is not None
             else [
-                YesOnlyEVStrategy(fee_rate),
-                ConsistencyStrategy(fee_rate),
+                YesOnlyEVStrategy(fee_rate, fee_fn=fee_fn),
+                ConsistencyStrategy(fee_rate, fee_fn=fee_fn),
             ]
         )
         self._last_markets_scanned = 0

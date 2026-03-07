@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from arbiter.ingestion.base import Contract
+from arbiter.scoring.fees import FeeFn
 from arbiter.scoring.kelly import kelly_criterion
 
 
@@ -31,18 +32,22 @@ def compute_ev(
     contract: Contract,
     model_prob_yes: float,
     fee_rate: float = 0.0,
+    fee_fn: FeeFn | None = None,
+    is_taker: bool = True,
 ) -> list[ScoredOpportunity]:
     """Compute expected value for both YES and NO sides of a contract.
 
-    EV per direction = model_prob - (market_price + fee_rate)
+    EV per direction = model_prob - (market_price + fee)
 
-    The fee_rate accounts for execution costs (platform fees, half-spread).
-    A positive EV means the model believes the contract is mispriced in our favor.
+    Fee is computed by ``fee_fn(market_price, is_taker)`` when provided,
+    otherwise falls back to the legacy flat ``fee_rate``.
 
     Args:
         contract: The normalized market contract.
         model_prob_yes: Model's estimated probability of YES outcome, in (0, 1).
-        fee_rate: Execution cost as a fraction of contract price (default 0).
+        fee_rate: Legacy flat execution cost (default 0). Ignored when fee_fn is set.
+        fee_fn: Callable(price, is_taker) → fee. Overrides fee_rate when provided.
+        is_taker: Whether this is a taker (True) or maker (False) execution.
 
     Returns:
         List of ScoredOpportunity for both YES and NO sides.
@@ -50,7 +55,8 @@ def compute_ev(
     results: list[ScoredOpportunity] = []
 
     # YES side
-    yes_cost = contract.yes_price + fee_rate
+    yes_fee = fee_fn(contract.yes_price, is_taker) if fee_fn else fee_rate
+    yes_cost = contract.yes_price + yes_fee
     if 0 < yes_cost < 1:
         ev_yes = model_prob_yes - yes_cost
         payout_ratio = (1.0 / yes_cost) - 1.0
@@ -68,7 +74,8 @@ def compute_ev(
 
     # NO side
     model_prob_no = 1.0 - model_prob_yes
-    no_cost = contract.no_price + fee_rate
+    no_fee = fee_fn(contract.no_price, is_taker) if fee_fn else fee_rate
+    no_cost = contract.no_price + no_fee
     if 0 < no_cost < 1:
         ev_no = model_prob_no - no_cost
         payout_ratio = (1.0 / no_cost) - 1.0

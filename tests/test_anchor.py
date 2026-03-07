@@ -14,6 +14,7 @@ from arbiter.scoring.anchor import (
     find_anchor_mispricings,
     group_anchor_contracts,
 )
+from arbiter.scoring.fees import kalshi_fee
 
 
 def _make_contract(
@@ -363,3 +364,25 @@ class TestPlattCalibrator:
     def test_unfitted_empty_input(self):
         cal = PlattCalibrator()
         assert cal.predict([]) == []
+
+
+class TestFindAnchorMispricingsFeeFn:
+    def test_fee_fn_applies_parabolic_fee(self):
+        group = [
+            (0.004, _make_contract("KXCPI-26JAN-T0.004", 0.08)),
+        ]
+        fn_result = find_anchor_mispricings(group, mu=0.003, sigma=0.0015, fee_fn=kalshi_fee)
+        # kalshi_fee(0.08, True) = ceil(0.07*0.08*0.92 * 100)/100 = ceil(0.5152)/100 = 0.01
+        # Same as flat 0.01 in this case, but uses the fee_fn code path
+        assert len(fn_result) == 1
+        assert fn_result[0].expected_value > 0
+
+    def test_fee_fn_overrides_fee_rate(self):
+        group = [
+            (0.004, _make_contract("KXCPI-26JAN-T0.004", 0.08)),
+        ]
+        # fee_rate=0.99 would kill any edge, but fee_fn overrides it
+        result = find_anchor_mispricings(
+            group, mu=0.003, sigma=0.0015, fee_rate=0.99, fee_fn=kalshi_fee
+        )
+        assert len(result) == 1
