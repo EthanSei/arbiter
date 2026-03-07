@@ -18,6 +18,7 @@ from collections import defaultdict
 
 from arbiter.ingestion.base import Contract
 from arbiter.scoring.ev import ScoredOpportunity
+from arbiter.scoring.fees import FeeFn
 from arbiter.scoring.kelly import kelly_criterion
 
 _SUFFIX_RE = re.compile(r"-(\d+)$")
@@ -34,6 +35,7 @@ _IS_BELOW_RE = re.compile(r"MINMON", re.IGNORECASE)
 def find_consistency_violations(
     contracts: list[Contract],
     fee_rate: float = 0.0,
+    fee_fn: FeeFn | None = None,
 ) -> list[ScoredOpportunity]:
     """Return ScoredOpportunity for each Kalshi range contract underpriced vs its siblings.
 
@@ -44,7 +46,8 @@ def find_consistency_violations(
 
     Args:
         contracts: All contracts from the current scan cycle.
-        fee_rate: Execution cost applied to EV; same value used in compute_ev.
+        fee_rate: Legacy flat execution cost. Ignored when fee_fn is provided.
+        fee_fn: Callable(price, is_taker) → fee. Overrides fee_rate when set.
 
     Returns:
         ScoredOpportunity list, direction always "yes" (buy the underpriced side).
@@ -86,11 +89,12 @@ def find_consistency_violations(
                 continue
 
             model_prob = anchor_price
-            ev = model_prob - contract.yes_price - fee_rate
+            fee = fee_fn(contract.yes_price, True) if fee_fn else fee_rate
+            ev = model_prob - contract.yes_price - fee
             if ev <= 0:
                 continue
 
-            yes_cost = contract.yes_price + fee_rate
+            yes_cost = contract.yes_price + fee
             payout_ratio = (1.0 / yes_cost) - 1.0 if yes_cost < 1.0 else 0.0
             kelly = kelly_criterion(model_prob, payout_ratio)
 

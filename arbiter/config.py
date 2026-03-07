@@ -42,7 +42,8 @@ class Settings(BaseSettings):
     max_markets_per_poll: int = Field(default=10_000, gt=0)
     kalshi_max_empty_pages: int = Field(default=10, gt=0)
     min_volume_24h: float = Field(default=5.0, ge=0)
-    fee_rate: float = Field(default=0.01, ge=0)
+    fee_rate: float = Field(default=0.01, ge=0)  # legacy flat rate, ignored when fee_model=kalshi
+    fee_model: str = Field(default="kalshi")  # "kalshi" (parabolic) or "flat"
 
     # Health check
     health_port: int = 8080

@@ -23,6 +23,7 @@ from scipy.stats import norm
 
 from arbiter.ingestion.base import Contract
 from arbiter.scoring.ev import ScoredOpportunity
+from arbiter.scoring.fees import FeeFn
 from arbiter.scoring.kelly import kelly_criterion
 
 _T_SUFFIX_RE = re.compile(r"-T([\d.]+)K?$", re.IGNORECASE)
@@ -136,14 +137,19 @@ def find_anchor_mispricings(
     fee_rate: float = 0.01,
     threshold_scale: float = 1.0,
     calibrator: Calibrator | None = None,
+    fee_fn: FeeFn | None = None,
 ) -> list[ScoredOpportunity]:
     """Compare anchor P(X>K) vs market YES price for each contract in a group.
 
-    Flags contracts where anchor_prob > market_price + fee_rate (underpriced YES).
+    Flags contracts where anchor_prob > market_price + fee (underpriced YES).
     Only produces YES-direction opportunities.
 
     When ``calibrator`` is provided, applies ``calibrator.predict([anchor_prob])[0]``
     to recalibrate the probability before scoring (e.g. isotonic regression).
+
+    Args:
+        fee_rate: Legacy flat fee. Ignored when fee_fn is provided.
+        fee_fn: Callable(price, is_taker) → fee. Overrides fee_rate when set.
     """
     results: list[ScoredOpportunity] = []
 
@@ -152,12 +158,13 @@ def find_anchor_mispricings(
         if calibrator is not None:
             anchor_prob = float(calibrator.predict([anchor_prob])[0])
         market_price = contract.yes_price
-        ev = anchor_prob - market_price - fee_rate
+        fee = fee_fn(market_price, True) if fee_fn else fee_rate
+        ev = anchor_prob - market_price - fee
 
         if ev <= 0:
             continue
 
-        yes_cost = market_price + fee_rate
+        yes_cost = market_price + fee
         payout_ratio = (1.0 / yes_cost) - 1.0 if yes_cost < 1.0 else 0.0
         kelly = kelly_criterion(anchor_prob, payout_ratio)
 
