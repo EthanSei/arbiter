@@ -306,6 +306,22 @@ async def test_run_cycle_creates_market_snapshot(db_factory) -> None:
     assert snaps[0].features is not None
 
 
+async def test_snapshot_includes_series_ticker(db_factory) -> None:
+    """MarketSnapshot should persist series_ticker from Contract."""
+    contract = _contract(contract_id="KXCPI-26MAR-T3.0")
+    # Override series_ticker via dataclass replace
+    contract = Contract(**{**contract.__dict__, "series_ticker": "KXCPI"})
+    p = _pipeline([_OkClient([contract])], _FixedEstimator(0.50), [], db_factory)
+    await p.run_cycle()
+
+    async with db_factory() as session:
+        from sqlalchemy import select
+
+        snaps = (await session.execute(select(MarketSnapshot))).scalars().all()
+    assert len(snaps) == 1
+    assert snaps[0].series_ticker == "KXCPI"
+
+
 # ---------------------------------------------------------------------------
 # run_cycle — state-based deduplication
 # ---------------------------------------------------------------------------
@@ -492,6 +508,70 @@ async def test_run_cycle_alerts_on_consistency_violation(db_factory) -> None:
     assert len(channel.sent) == 1
     assert channel.sent[0].contract.contract_id == "KXBTCMAXMON-BTC-26MAR31-8000000"
     assert channel.sent[0].direction == "yes"
+
+
+# ---------------------------------------------------------------------------
+# run_cycle — data collector integration
+# ---------------------------------------------------------------------------
+
+
+class _RecordingDataCollector:
+    """Test double that records collect_orderbooks calls."""
+
+    def __init__(self) -> None:
+        self.calls: list[list[Contract]] = []
+
+    async def collect_orderbooks(self, contracts: list[Contract]) -> int:
+        self.calls.append(contracts)
+        return len(contracts)
+
+
+async def test_run_cycle_calls_data_collector(db_factory) -> None:
+    """When data_collector is provided, collect_orderbooks is called with all contracts."""
+    contract = _contract(yes_price=0.50)
+    collector = _RecordingDataCollector()
+    p = ScanPipeline(
+        clients=[_OkClient([contract])],
+        estimator=_FixedEstimator(0.50),
+        channels=[],
+        session_factory=db_factory,
+        data_collector=collector,
+    )
+    await p.run_cycle()
+    assert len(collector.calls) == 1
+    assert len(collector.calls[0]) == 1
+    assert collector.calls[0][0].contract_id == "TEST-001"
+
+
+async def test_run_cycle_works_without_data_collector(db_factory) -> None:
+    """When data_collector is None (default), cycle completes normally."""
+    p = ScanPipeline(
+        clients=[_OkClient([_contract()])],
+        estimator=_FixedEstimator(0.50),
+        channels=[],
+        session_factory=db_factory,
+    )
+    # Should not raise
+    await p.run_cycle()
+
+
+async def test_run_cycle_continues_after_data_collector_error(db_factory) -> None:
+    """A data_collector failure should not abort the cycle."""
+
+    class _BrokenCollector:
+        async def collect_orderbooks(self, contracts: list[Contract]) -> int:
+            raise RuntimeError("collector broke")
+
+    channel = _RecordingChannel()
+    p = ScanPipeline(
+        clients=[_OkClient([_contract(yes_price=0.30)])],
+        estimator=_FixedEstimator(0.70),
+        channels=[channel],
+        session_factory=db_factory,
+        data_collector=_BrokenCollector(),
+    )
+    alerts = await p.run_cycle()
+    assert alerts >= 1  # Alert still sent despite collector failure
 
 
 async def test_no_channels_does_not_stamp_last_alerted_at(db_factory) -> None:

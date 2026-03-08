@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from arbiter.alerts.base import AlertChannel
 from arbiter.db.models import AlertLog, Direction, MarketSnapshot, Opportunity, Source
 from arbiter.ingestion.base import Contract, MarketClient
+from arbiter.ingestion.collector import DataCollector
 from arbiter.models.base import ProbabilityEstimator
 from arbiter.models.features import FEATURE_VERSION, SPEC, extract_features
 from arbiter.scoring.ev import ScoredOpportunity
@@ -52,6 +53,7 @@ class ScanPipeline:
         strategies: list[Strategy] | None = None,
         paper_trader: PaperTrader | None = None,
         fee_fn: FeeFn | None = None,
+        data_collector: DataCollector | None = None,
     ) -> None:
         self._clients = clients
         self._estimator = estimator
@@ -62,6 +64,7 @@ class ScanPipeline:
         self._kelly_fraction = kelly_fraction
         self._paper_trader = paper_trader
         self._fee_fn = fee_fn
+        self._data_collector = data_collector
         self._strategies = (
             strategies
             if strategies is not None
@@ -166,6 +169,14 @@ class ScanPipeline:
                 await self._snapshot(session, contract)
 
             await session.commit()
+
+        # Order book data collection (separate sessions, after main commit)
+        if self._data_collector is not None:
+            try:
+                collected = await self._data_collector.collect_orderbooks(all_contracts)
+                logger.info("Data collector: %d order book snapshots", collected)
+            except Exception as exc:
+                logger.warning("Data collector failed: %s", exc)
 
         t_end = asyncio.get_running_loop().time()
         logger.info(
@@ -286,6 +297,7 @@ class ScanPipeline:
             contract_id=contract.contract_id,
             title=contract.title,
             category=contract.category,
+            series_ticker=contract.series_ticker,
             features=features_json,
             feature_version=FEATURE_VERSION,
         )

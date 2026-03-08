@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any
 
 from arbiter.ingestion.base import Contract, HttpClient, MarketClient
+
+logger = logging.getLogger(__name__)
 
 
 class KalshiClient(MarketClient):
@@ -191,7 +194,8 @@ class KalshiClient(MarketClient):
         Automatically chunks into multiple requests when >100 tickers.
         """
         result: dict[str, list[dict[str, Any]]] = {}
-        chunk_size = 100
+        # Kalshi batch endpoint rejects large requests. Cap at 25 tickers per chunk.
+        chunk_size = 25
         for i in range(0, len(tickers), chunk_size):
             chunk = tickers[i : i + chunk_size]
             params: dict[str, str | int] = {
@@ -205,7 +209,11 @@ class KalshiClient(MarketClient):
 
             url = f"{self._base_url}/markets/candlesticks"
             resp = await self._http.get(url, params=params)
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                logger.warning(
+                    "Candlestick batch %d-%d failed: HTTP %d", i, i + len(chunk), resp.status_code
+                )
+                continue
             data: dict[str, Any] = resp.json()
             for market_entry in data.get("markets", []):
                 ticker = market_entry.get("market_ticker", "")
@@ -213,6 +221,34 @@ class KalshiClient(MarketClient):
                 if ticker:
                     result[ticker] = candles
         return result
+
+    async def fetch_orderbook(
+        self,
+        ticker: str,
+        *,
+        depth: int | None = None,
+    ) -> dict[str, list[dict[str, float | int]]]:
+        """Fetch order book for a single market.
+
+        Returns normalized bids/asks from the YES perspective:
+        - bids: YES buy orders (from orderbook.yes), price in [0,1]
+        - asks: YES sell orders (derived from orderbook.no), price = 1.0 - no_price
+        """
+        params: dict[str, str | int] = {}
+        if depth is not None:
+            params["depth"] = depth
+
+        url = f"{self._base_url}/markets/{ticker}/orderbook"
+        resp = await self._http.get(url, params=params)
+        resp.raise_for_status()
+        data: dict[str, Any] = resp.json()
+
+        ob = data.get("orderbook", {})
+        bids = [{"price": level[0] / 100.0, "quantity": level[1]} for level in ob.get("yes", [])]
+        asks = [
+            {"price": 1.0 - level[0] / 100.0, "quantity": level[1]} for level in ob.get("no", [])
+        ]
+        return {"bids": bids, "asks": asks}
 
     async def close(self) -> None:
         pass  # Client is borrowed, not owned
@@ -242,6 +278,8 @@ class KalshiClient(MarketClient):
             contract_id=str(m["ticker"]),
             title=str(m.get("title", "")),
             category=str(m.get("category", "")),
+            series_ticker=str(m.get("series_ticker") or ""),
+            event_ticker=str(m.get("event_ticker") or ""),
             yes_price=yes_price,
             no_price=1.0 - yes_price,
             yes_bid=yes_bid,

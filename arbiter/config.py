@@ -33,7 +33,15 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
 
     # Targeted series (comma-separated Kalshi series tickers)
-    kalshi_target_series: str = "KXCPI,KXCPIYOY,KXPAYROLLS,KXCPICOREYOY,KXJOBLESSCLAIMS"
+    # Economics: CPI, CPI YoY, Core CPI YoY, Payrolls, Jobless Claims, GDP, Fed Funds
+    # Crypto: BTC daily, ETH daily
+    # Equities: S&P 500, Nasdaq 100
+    kalshi_target_series: str = (
+        "KXCPI,KXCPIYOY,KXCPICOREYOY,KXPAYROLLS,KXJOBLESSCLAIMS,"
+        "KXGDP,KXFED,"
+        "KXBTCD,KXETHD,"
+        "KXINXU,KXNASDAQ100U"
+    )
 
     # Scanning parameters
     poll_interval_seconds: int = Field(default=300, gt=0)
@@ -44,6 +52,13 @@ class Settings(BaseSettings):
     min_volume_24h: float = Field(default=5.0, ge=0)
     fee_rate: float = Field(default=0.01, ge=0)  # legacy flat rate, ignored when fee_model=kalshi
     fee_model: str = Field(default="kalshi")  # "kalshi" (parabolic) or "flat"
+
+    # Trading safety
+    paper_trade_only: bool = True
+
+    # Data collection
+    data_collection_rpm: int = Field(default=60, gt=0)
+    orderbook_top_n: int = Field(default=20, gt=0)
 
     # Health check
     health_port: int = 8080

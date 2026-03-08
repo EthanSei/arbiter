@@ -4,9 +4,19 @@ import csv
 import io
 from datetime import UTC, datetime
 
-from arbiter.db.models import Direction, MarketSnapshot, Opportunity, PaperTrade, Source
+from arbiter.db.models import (
+    CandlestickBar,
+    Direction,
+    MarketSnapshot,
+    Opportunity,
+    OrderBookSnapshot,
+    PaperTrade,
+    Source,
+)
 from arbiter.export.dataframes import (
+    export_candlestick_bars,
     export_opportunities,
+    export_order_book_snapshots,
     export_paper_trades,
     export_snapshots,
     to_csv,
@@ -47,6 +57,7 @@ async def test_export_snapshots_returns_dicts(db_session):
         "contract_id",
         "title",
         "category",
+        "series_ticker",
         "feature_version",
         "outcome",
         "snapshot_at",
@@ -396,3 +407,223 @@ async def test_export_paper_trades_settled_only(db_session):
 
     all_rows = await export_paper_trades(db_session)
     assert len(all_rows) == 2
+
+
+# ---------------------------------------------------------------------------
+# export_order_book_snapshots
+# ---------------------------------------------------------------------------
+
+
+async def test_export_order_book_snapshots(db_session):
+    """Export OrderBookSnapshot rows as list of dicts."""
+    snap = OrderBookSnapshot(
+        source=Source.KALSHI,
+        contract_id="KXCPI-T3.0",
+        series_ticker="KXCPI",
+        event_ticker="KXCPI-26MAR",
+        bids=[{"price": 0.55, "quantity": 100}],
+        asks=[{"price": 0.57, "quantity": 150}],
+    )
+    db_session.add(snap)
+    await db_session.commit()
+
+    rows = await export_order_book_snapshots(db_session)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["contract_id"] == "KXCPI-T3.0"
+    assert row["series_ticker"] == "KXCPI"
+    assert row["source"] == "kalshi"
+    assert row["bids"] == [{"price": 0.55, "quantity": 100}]
+    assert row["asks"] == [{"price": 0.57, "quantity": 150}]
+
+
+async def test_export_order_book_snapshots_filter_by_contract(db_session):
+    """Filter by contract_id."""
+    for ticker in ["KXCPI-T3.0", "KXCPI-T3.5"]:
+        snap = OrderBookSnapshot(
+            source=Source.KALSHI,
+            contract_id=ticker,
+            bids=[],
+            asks=[],
+        )
+        db_session.add(snap)
+    await db_session.commit()
+
+    rows = await export_order_book_snapshots(db_session, contract_id="KXCPI-T3.0")
+    assert len(rows) == 1
+    assert rows[0]["contract_id"] == "KXCPI-T3.0"
+
+
+# ---------------------------------------------------------------------------
+# export_candlestick_bars
+# ---------------------------------------------------------------------------
+
+
+async def test_export_candlestick_bars(db_session):
+    """Export CandlestickBar rows as list of dicts."""
+    bar = CandlestickBar(
+        source=Source.KALSHI,
+        contract_id="KXCPI-T3.0",
+        series_ticker="KXCPI",
+        period_start=datetime(2026, 3, 7, 12, 0, 0, tzinfo=UTC),
+        period_interval=60,
+        open=0.55,
+        high=0.60,
+        low=0.52,
+        close=0.58,
+        volume=1200,
+    )
+    db_session.add(bar)
+    await db_session.commit()
+
+    rows = await export_candlestick_bars(db_session)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["contract_id"] == "KXCPI-T3.0"
+    assert row["series_ticker"] == "KXCPI"
+    assert row["open"] == 0.55
+    assert row["high"] == 0.60
+    assert row["low"] == 0.52
+    assert row["close"] == 0.58
+    assert row["volume"] == 1200
+    assert row["period_interval"] == 60
+
+
+async def test_export_candlestick_bars_pagination(db_session):
+    """Limit and offset should paginate results."""
+    for i in range(5):
+        bar = CandlestickBar(
+            source=Source.KALSHI,
+            contract_id=f"KXCPI-T{i}",
+            series_ticker="KXCPI",
+            period_start=datetime(2026, 3, 7, i, 0, 0, tzinfo=UTC),
+            period_interval=60,
+            open=0.50,
+            high=0.55,
+            low=0.48,
+            close=0.52,
+            volume=100,
+        )
+        db_session.add(bar)
+    await db_session.commit()
+
+    # First page
+    rows = await export_candlestick_bars(db_session, limit=2)
+    assert len(rows) == 2
+
+    # Second page
+    rows2 = await export_candlestick_bars(db_session, limit=2, offset=2)
+    assert len(rows2) == 2
+
+    # All rows
+    all_rows = await export_candlestick_bars(db_session)
+    assert len(all_rows) == 5
+
+
+async def test_export_snapshots_pagination(db_session):
+    """Limit and offset should paginate snapshot results."""
+    for i in range(5):
+        snap = MarketSnapshot(
+            source=Source.KALSHI,
+            contract_id=f"SNAP-{i}",
+            title=f"Snap {i}",
+            category="test",
+            feature_version="0.1.0",
+        )
+        db_session.add(snap)
+    await db_session.commit()
+
+    rows = await export_snapshots(db_session, limit=3)
+    assert len(rows) == 3
+
+    rows2 = await export_snapshots(db_session, limit=3, offset=3)
+    assert len(rows2) == 2
+
+
+async def test_export_order_book_snapshots_pagination(db_session):
+    """Limit and offset should paginate order book snapshot results."""
+    for i in range(4):
+        snap = OrderBookSnapshot(
+            source=Source.KALSHI,
+            contract_id=f"OB-{i}",
+            bids=[],
+            asks=[],
+        )
+        db_session.add(snap)
+    await db_session.commit()
+
+    rows = await export_order_book_snapshots(db_session, limit=2)
+    assert len(rows) == 2
+
+
+async def test_export_opportunities_pagination(db_session):
+    """Limit and offset should paginate opportunity results."""
+    for i in range(5):
+        opp = Opportunity(
+            source=Source.KALSHI,
+            contract_id=f"OPP-{i}",
+            title=f"Opp {i}",
+            direction=Direction.YES,
+            strategy_name="test",
+            market_price=0.50,
+            model_probability=0.60,
+            expected_value=0.05,
+            kelly_size=0.10,
+        )
+        db_session.add(opp)
+    await db_session.commit()
+
+    rows = await export_opportunities(db_session, limit=3)
+    assert len(rows) == 3
+
+    rows2 = await export_opportunities(db_session, limit=3, offset=3)
+    assert len(rows2) == 2
+
+
+async def test_export_paper_trades_pagination(db_session):
+    """Limit and offset should paginate paper trade results."""
+    for i in range(5):
+        trade = PaperTrade(
+            source=Source.KALSHI,
+            contract_id=f"PT-{i}",
+            direction=Direction.YES,
+            strategy_name="test",
+            entry_price=0.50,
+            quantity=10,
+            model_probability=0.60,
+            expected_value=0.05,
+        )
+        db_session.add(trade)
+    await db_session.commit()
+
+    rows = await export_paper_trades(db_session, limit=2)
+    assert len(rows) == 2
+
+    rows2 = await export_paper_trades(db_session, limit=2, offset=2)
+    assert len(rows2) == 2
+
+    all_rows = await export_paper_trades(db_session)
+    assert len(all_rows) == 5
+
+
+async def test_export_candlestick_bars_filter_by_contract(db_session):
+    """Filter by contract_id."""
+    for ticker in ["KXCPI-T3.0", "KXCPI-T3.5"]:
+        bar = CandlestickBar(
+            source=Source.KALSHI,
+            contract_id=ticker,
+            series_ticker="KXCPI",
+            period_start=datetime(2026, 3, 7, 12, 0, 0, tzinfo=UTC),
+            period_interval=60,
+            open=0.50,
+            high=0.55,
+            low=0.48,
+            close=0.52,
+            volume=100,
+        )
+        db_session.add(bar)
+    await db_session.commit()
+
+    rows = await export_candlestick_bars(db_session, contract_id="KXCPI-T3.0")
+    assert len(rows) == 1
+    assert rows[0]["contract_id"] == "KXCPI-T3.0"

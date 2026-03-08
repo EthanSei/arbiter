@@ -6,11 +6,31 @@ Returns list[dict] -- no pandas dependency. Users: pd.DataFrame(result) in noteb
 import csv
 import io
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from arbiter.db.models import MarketSnapshot, Opportunity, PaperTrade, Source
+from arbiter.db.models import (
+    CandlestickBar,
+    MarketSnapshot,
+    Opportunity,
+    OrderBookSnapshot,
+    PaperTrade,
+    Source,
+)
+
+
+def _paginate(
+    stmt: Select[Any], limit: int | None, offset: int | None, order_by: Any = None
+) -> Select[Any]:
+    if order_by is not None:
+        stmt = stmt.order_by(order_by)
+    if offset is not None:
+        stmt = stmt.offset(offset)
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    return stmt
 
 
 async def export_snapshots(
@@ -20,6 +40,8 @@ async def export_snapshots(
     end_date: datetime | None = None,
     source: str | None = None,
     category: str | None = None,
+    limit: int | None = None,
+    offset: int | None = None,
 ) -> list[dict[str, object]]:
     """Export MarketSnapshot rows as list of dicts.
 
@@ -38,6 +60,8 @@ async def export_snapshots(
     if category is not None:
         stmt = stmt.where(MarketSnapshot.category == category)
 
+    stmt = _paginate(stmt, limit, offset, order_by=MarketSnapshot.snapshot_at)
+
     result = await session.execute(stmt)
     snapshots = result.scalars().all()
 
@@ -49,6 +73,7 @@ async def export_snapshots(
             "contract_id": snap.contract_id,
             "title": snap.title,
             "category": snap.category,
+            "series_ticker": snap.series_ticker,
             "feature_version": snap.feature_version,
             "outcome": snap.outcome,
             "snapshot_at": snap.snapshot_at,
@@ -68,6 +93,8 @@ async def export_opportunities(
     *,
     active_only: bool = False,
     start_date: datetime | None = None,
+    limit: int | None = None,
+    offset: int | None = None,
 ) -> list[dict[str, object]]:
     """Export Opportunity rows as list of dicts.
 
@@ -79,6 +106,8 @@ async def export_opportunities(
         stmt = stmt.where(Opportunity.active.is_(True))
     if start_date is not None:
         stmt = stmt.where(Opportunity.discovered_at >= start_date)
+
+    stmt = _paginate(stmt, limit, offset, order_by=Opportunity.discovered_at)
 
     result = await session.execute(stmt)
     opportunities = result.scalars().all()
@@ -112,12 +141,16 @@ async def export_paper_trades(
     session: AsyncSession,
     *,
     settled_only: bool = False,
+    limit: int | None = None,
+    offset: int | None = None,
 ) -> list[dict[str, object]]:
     """Export PaperTrade rows as list of dicts."""
     stmt = select(PaperTrade)
 
     if settled_only:
         stmt = stmt.where(PaperTrade.exited_at.is_not(None))
+
+    stmt = _paginate(stmt, limit, offset, order_by=PaperTrade.entered_at)
 
     result = await session.execute(stmt)
     trades = result.scalars().all()
@@ -144,6 +177,90 @@ async def export_paper_trades(
         )
 
     return rows
+
+
+async def export_order_book_snapshots(
+    session: AsyncSession,
+    *,
+    contract_id: str | None = None,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+    limit: int | None = None,
+    offset: int | None = None,
+) -> list[dict[str, object]]:
+    """Export OrderBookSnapshot rows as list of dicts."""
+    stmt = select(OrderBookSnapshot)
+
+    if contract_id is not None:
+        stmt = stmt.where(OrderBookSnapshot.contract_id == contract_id)
+    if start_date is not None:
+        stmt = stmt.where(OrderBookSnapshot.snapshot_at >= start_date)
+    if end_date is not None:
+        stmt = stmt.where(OrderBookSnapshot.snapshot_at <= end_date)
+
+    stmt = _paginate(stmt, limit, offset, order_by=OrderBookSnapshot.snapshot_at)
+
+    result = await session.execute(stmt)
+    snapshots = result.scalars().all()
+
+    return [
+        {
+            "id": s.id,
+            "source": str(s.source.value) if s.source else None,
+            "contract_id": s.contract_id,
+            "series_ticker": s.series_ticker,
+            "event_ticker": s.event_ticker,
+            "bids": s.bids,
+            "asks": s.asks,
+            "snapshot_at": s.snapshot_at,
+        }
+        for s in snapshots
+    ]
+
+
+async def export_candlestick_bars(
+    session: AsyncSession,
+    *,
+    contract_id: str | None = None,
+    series_ticker: str | None = None,
+    start_date: datetime | None = None,
+    end_date: datetime | None = None,
+    limit: int | None = None,
+    offset: int | None = None,
+) -> list[dict[str, object]]:
+    """Export CandlestickBar rows as list of dicts."""
+    stmt = select(CandlestickBar)
+
+    if contract_id is not None:
+        stmt = stmt.where(CandlestickBar.contract_id == contract_id)
+    if series_ticker is not None:
+        stmt = stmt.where(CandlestickBar.series_ticker == series_ticker)
+    if start_date is not None:
+        stmt = stmt.where(CandlestickBar.period_start >= start_date)
+    if end_date is not None:
+        stmt = stmt.where(CandlestickBar.period_start <= end_date)
+
+    stmt = _paginate(stmt, limit, offset, order_by=CandlestickBar.period_start)
+
+    result = await session.execute(stmt)
+    bars = result.scalars().all()
+
+    return [
+        {
+            "id": b.id,
+            "source": str(b.source.value) if b.source else None,
+            "contract_id": b.contract_id,
+            "series_ticker": b.series_ticker,
+            "period_start": b.period_start,
+            "period_interval": b.period_interval,
+            "open": b.open,
+            "high": b.high,
+            "low": b.low,
+            "close": b.close,
+            "volume": b.volume,
+        }
+        for b in bars
+    ]
 
 
 def to_csv(rows: list[dict[str, object]]) -> str:
