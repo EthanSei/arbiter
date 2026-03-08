@@ -52,3 +52,11 @@ class TestConfigValidation:
     def test_polymarket_enabled_accepts_true(self):
         s = Settings(polymarket_enabled=True)
         assert s.polymarket_enabled is True
+
+    def test_paper_trade_only_defaults_true(self):
+        s = Settings()
+        assert s.paper_trade_only is True
+
+    def test_paper_trade_only_accepts_false(self):
+        s = Settings(paper_trade_only=False)
+        assert s.paper_trade_only is False

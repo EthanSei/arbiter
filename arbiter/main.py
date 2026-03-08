@@ -20,6 +20,7 @@ from arbiter.data.providers.fred import FREDSurpriseProvider
 from arbiter.db.session import async_session_factory, engine, init_db
 from arbiter.health import start_health_server
 from arbiter.ingestion.base import MarketClient
+from arbiter.ingestion.collector import DataCollector
 from arbiter.ingestion.kalshi import KalshiClient
 from arbiter.ingestion.polymarket import PolymarketClient
 from arbiter.ingestion.rate_limiter import RateLimitedClient
@@ -58,6 +59,15 @@ async def main(stdout_alerts: bool = False) -> None:
         min_volume_24h=settings.min_volume_24h,
         max_empty_pages=settings.kalshi_max_empty_pages,
         series_tickers=series_tickers,
+    )
+
+    # Second rate-limited client for background data collection (order book snapshots).
+    # Separate RPM budget so data collection doesn't starve market fetches.
+    data_http = httpx.AsyncClient(timeout=30.0)
+    data_rl = RateLimitedClient(data_http, rpm=settings.data_collection_rpm)
+    data_kalshi = KalshiClient(data_rl, base_url=settings.kalshi_api_base)
+    data_collector = DataCollector(
+        data_kalshi, async_session_factory, top_n=settings.orderbook_top_n
     )
 
     clients: list[MarketClient] = [kalshi]
@@ -123,6 +133,7 @@ async def main(stdout_alerts: bool = False) -> None:
         kelly_fraction=settings.kelly_fraction,
         strategies=strategies,
         fee_fn=fee_fn,
+        data_collector=data_collector,
     )
 
     health_task = asyncio.create_task(start_health_server(settings.health_port))
@@ -143,6 +154,7 @@ async def main(stdout_alerts: bool = False) -> None:
             await health_task
 
         await kalshi_http.aclose()
+        await data_http.aclose()
         if poly_http is not None:
             await poly_http.aclose()
         for channel in channels:

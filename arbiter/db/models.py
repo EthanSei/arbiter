@@ -4,7 +4,19 @@ import enum
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import JSON, Boolean, DateTime, Enum, Float, Index, String, Text, func
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Enum,
+    Float,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -87,6 +99,7 @@ class MarketSnapshot(Base):
     contract_id: Mapped[str] = mapped_column(String(256))
     title: Mapped[str] = mapped_column(Text)
     category: Mapped[str] = mapped_column(String(128), default="unknown")
+    series_ticker: Mapped[str] = mapped_column(String(64), default="")
 
     features: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
     feature_version: Mapped[str] = mapped_column(String(32), default="0.0.0")
@@ -99,7 +112,64 @@ class MarketSnapshot(Base):
     )
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    __table_args__ = (Index("ix_snapshot_lookup", "contract_id", "snapshot_at"),)
+    __table_args__ = (
+        Index("ix_snapshot_lookup", "contract_id", "snapshot_at"),
+        Index("ix_snapshot_at", "snapshot_at"),
+    )
+
+
+class OrderBookSnapshot(Base):
+    """Point-in-time snapshot of a contract's order book.
+
+    Stores full bid/ask depth as JSON arrays for maker strategy analysis.
+    Each entry: {"price": float, "quantity": int}.
+    """
+
+    __tablename__ = "order_book_snapshots"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    source: Mapped[Source] = mapped_column(Enum(Source))
+    contract_id: Mapped[str] = mapped_column(String(256))
+    series_ticker: Mapped[str] = mapped_column(String(64), default="")
+    event_ticker: Mapped[str] = mapped_column(String(128), default="")
+    bids: Mapped[list[dict[str, object]]] = mapped_column(JSON)
+    asks: Mapped[list[dict[str, object]]] = mapped_column(JSON)
+    snapshot_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_ob_lookup", "contract_id", "snapshot_at"),
+        Index("ix_ob_snapshot_at", "snapshot_at"),
+    )
+
+
+class CandlestickBar(Base):
+    """OHLCV candlestick bar for a contract over a fixed time period.
+
+    Prices are YES prices in [0, 1]. period_interval is in minutes
+    (60 = 1h, 1440 = 1 day).
+    """
+
+    __tablename__ = "candlestick_bars"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    source: Mapped[Source] = mapped_column(Enum(Source))
+    contract_id: Mapped[str] = mapped_column(String(256))
+    series_ticker: Mapped[str] = mapped_column(String(64), default="")
+    period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    period_interval: Mapped[int] = mapped_column(Integer)  # minutes (60=1h, 1440=1d)
+    open: Mapped[float] = mapped_column(Float)
+    high: Mapped[float] = mapped_column(Float)
+    low: Mapped[float] = mapped_column(Float)
+    close: Mapped[float] = mapped_column(Float)
+    volume: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    __table_args__ = (
+        Index("ix_candle_lookup", "contract_id", "period_start"),
+        Index("ix_candle_period_start", "period_start"),
+        UniqueConstraint("contract_id", "period_start", "period_interval", name="uq_candle_dedup"),
+    )
 
 
 class PaperTrade(Base):

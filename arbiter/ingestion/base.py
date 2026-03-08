@@ -35,6 +35,9 @@ class Contract:
     url: str
     status: str  # "open", "closed", etc.
 
+    series_ticker: str = ""  # Kalshi series (e.g. "KXCPI")
+    event_ticker: str = ""  # Kalshi event (e.g. "KXCPI-26MAR")
+
 
 class HttpClient(Protocol):
     """Structural typing for httpx.AsyncClient and RateLimitedClient."""

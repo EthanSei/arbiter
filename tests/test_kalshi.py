@@ -14,6 +14,8 @@ KALSHI_MARKET_RESPONSE = {
     "markets": [
         {
             "ticker": "KXBTC-26MAR14-T100000",
+            "event_ticker": "KXBTC-26MAR14",
+            "series_ticker": "KXBTC",
             "title": "Bitcoin above $100,000 on March 14?",
             "category": "Crypto",
             "yes_bid_dollars": "0.62",
@@ -30,6 +32,8 @@ KALSHI_MARKET_RESPONSE = {
         },
         {
             "ticker": "KXFED-26MAR-T425",
+            "event_ticker": "KXFED-26MAR",
+            "series_ticker": "KXFED",
             "title": "Fed funds rate above 4.25% after March meeting?",
             "category": "Economics",
             "yes_bid_dollars": "0.40",
@@ -484,6 +488,60 @@ class TestKalshiClientFetchMarkets:
         assert len(requests) == 1  # breaks immediately, no infinite loop
 
 
+class TestKalshiContractSeriesEventTicker:
+    """Tests for series_ticker and event_ticker on parsed Contract objects."""
+
+    async def test_parses_series_ticker(self):
+        transport = _kalshi_transport([KALSHI_MARKET_RESPONSE])
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            contracts = await client.fetch_markets()
+
+        assert contracts[0].series_ticker == "KXBTC"
+        assert contracts[1].series_ticker == "KXFED"
+
+    async def test_parses_event_ticker(self):
+        transport = _kalshi_transport([KALSHI_MARKET_RESPONSE])
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            contracts = await client.fetch_markets()
+
+        assert contracts[0].event_ticker == "KXBTC-26MAR14"
+        assert contracts[1].event_ticker == "KXFED-26MAR"
+
+    async def test_defaults_to_empty_when_missing(self):
+        """When API response lacks series_ticker/event_ticker, default to empty string."""
+        market = {
+            k: v
+            for k, v in KALSHI_MARKET_RESPONSE["markets"][0].items()
+            if k not in ("series_ticker", "event_ticker")
+        }
+        resp = {"markets": [market], "cursor": ""}
+        transport = _kalshi_transport([resp])
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            contracts = await client.fetch_markets()
+
+        assert contracts[0].series_ticker == ""
+        assert contracts[0].event_ticker == ""
+
+    async def test_handles_explicit_null_values(self):
+        """When API returns series_ticker: null, should produce empty string not 'None'."""
+        market = {
+            **KALSHI_MARKET_RESPONSE["markets"][0],
+            "series_ticker": None,
+            "event_ticker": None,
+        }
+        resp = {"markets": [market], "cursor": ""}
+        transport = _kalshi_transport([resp])
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            contracts = await client.fetch_markets()
+
+        assert contracts[0].series_ticker == ""
+        assert contracts[0].event_ticker == ""
+
+
 class TestKalshiClientFetchSettled:
     async def test_fetch_settled_returns_raw_dicts(self):
         transport = _kalshi_transport([KALSHI_SETTLED_MARKET_RESPONSE])
@@ -885,25 +943,23 @@ class TestKalshiClientFetchCandlesticksBatch:
 
         assert result == {}
 
-    async def test_raises_on_http_error(self):
-        """Should raise on non-200 status."""
+    async def test_skips_failed_chunks(self):
+        """Should skip chunks that return HTTP errors and continue with others."""
         transport = httpx.MockTransport(lambda _req: httpx.Response(500))
         async with httpx.AsyncClient(transport=transport) as http:
             client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
-            with pytest.raises(httpx.HTTPStatusError):
-                await client.fetch_candlesticks_batch(["KXBTC-26MAR14-T100000"])
+            result = await client.fetch_candlesticks_batch(["KXBTC-26MAR14-T100000"])
+        assert result == {}
 
     async def test_chunks_large_ticker_lists(self):
-        """Should split into multiple requests when >100 tickers."""
-        tickers = [f"TICKER-{i}" for i in range(150)]
+        """Should split into multiple requests when >25 tickers."""
+        tickers = [f"TICKER-{i}" for i in range(60)]
         # Response for each chunk — markets array format
-        chunk1_response = {
-            "markets": [{"market_ticker": t, "candlesticks": []} for t in tickers[:100]]
-        }
-        chunk2_response = {
-            "markets": [{"market_ticker": t, "candlesticks": []} for t in tickers[100:]]
-        }
-        page_iter = iter([chunk1_response, chunk2_response])
+        responses = []
+        for i in range(0, 60, 25):
+            chunk = tickers[i : i + 25]
+            responses.append({"markets": [{"market_ticker": t, "candlesticks": []} for t in chunk]})
+        page_iter = iter(responses)
         request_log: list[httpx.Request] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -911,12 +967,111 @@ class TestKalshiClientFetchCandlesticksBatch:
             try:
                 return httpx.Response(200, json=next(page_iter))
             except StopIteration:
-                return httpx.Response(200, json={"candlesticks": {}})
+                return httpx.Response(200, json={"markets": []})
 
         transport = httpx.MockTransport(handler)
         async with httpx.AsyncClient(transport=transport) as http:
             client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
             result = await client.fetch_candlesticks_batch(tickers)
 
-        assert len(request_log) == 2
-        assert len(result) == 150
+        assert len(request_log) == 3  # 60 tickers / 25 per chunk = 3 requests
+        assert len(result) == 60
+
+
+# --- Order Book API fixtures ---
+
+ORDERBOOK_RESPONSE = {
+    "orderbook": {
+        "yes": [[65, 100], [62, 250], [60, 500]],
+        "no": [[38, 150], [35, 300]],
+    },
+}
+
+ORDERBOOK_EMPTY = {
+    "orderbook": {
+        "yes": [],
+        "no": [],
+    },
+}
+
+
+def _orderbook_transport(response: dict) -> tuple[httpx.MockTransport, list]:
+    """Transport for orderbook endpoint that records requests."""
+    request_log: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        request_log.append(request)
+        return httpx.Response(200, json=response)
+
+    return httpx.MockTransport(handler), request_log
+
+
+class TestKalshiClientFetchOrderbook:
+    async def test_returns_bids_and_asks(self):
+        """Should return normalized bids/asks dicts from YES/NO order book."""
+        transport, _ = _orderbook_transport(ORDERBOOK_RESPONSE)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            result = await client.fetch_orderbook("KXBTC-26MAR14-T100000")
+
+        assert "bids" in result
+        assert "asks" in result
+        # YES bids become our bids, prices converted from cents to [0,1]
+        assert result["bids"] == [
+            {"price": 0.65, "quantity": 100},
+            {"price": 0.62, "quantity": 250},
+            {"price": 0.60, "quantity": 500},
+        ]
+        # NO bids become our asks: ask_price = 1.0 - no_bid_price
+        assert result["asks"] == [
+            {"price": 0.62, "quantity": 150},
+            {"price": 0.65, "quantity": 300},
+        ]
+
+    async def test_sends_correct_url_path(self):
+        """Should use /markets/{ticker}/orderbook."""
+        transport, requests = _orderbook_transport(ORDERBOOK_RESPONSE)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            await client.fetch_orderbook("KXBTC-26MAR14-T100000")
+
+        url = str(requests[0].url)
+        assert "/markets/KXBTC-26MAR14-T100000/orderbook" in url
+
+    async def test_sends_depth_param(self):
+        """Should send depth as query param when provided."""
+        transport, requests = _orderbook_transport(ORDERBOOK_RESPONSE)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            await client.fetch_orderbook("KXBTC-26MAR14-T100000", depth=10)
+
+        params = requests[0].url.params
+        assert params["depth"] == "10"
+
+    async def test_omits_depth_when_none(self):
+        """Should not send depth when not provided."""
+        transport, requests = _orderbook_transport(ORDERBOOK_RESPONSE)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            await client.fetch_orderbook("KXBTC-26MAR14-T100000")
+
+        params = requests[0].url.params
+        assert "depth" not in params
+
+    async def test_empty_orderbook(self):
+        """Should return empty lists for illiquid markets."""
+        transport, _ = _orderbook_transport(ORDERBOOK_EMPTY)
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            result = await client.fetch_orderbook("KXMEDIA-26MAR-T1")
+
+        assert result["bids"] == []
+        assert result["asks"] == []
+
+    async def test_raises_on_http_error(self):
+        """Should raise on non-200 status."""
+        transport = httpx.MockTransport(lambda _req: httpx.Response(500))
+        async with httpx.AsyncClient(transport=transport) as http:
+            client = KalshiClient(http, base_url="https://api.kalshi.com/trade-api/v2")
+            with pytest.raises(httpx.HTTPStatusError):
+                await client.fetch_orderbook("KXBTC-26MAR14-T100000")
